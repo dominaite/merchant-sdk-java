@@ -1,0 +1,54 @@
+name: Publish to Maven Central
+
+# Tag push = release. The tag must match the pom version (v0.5.1 for 0.5.1).
+#
+# Repository secrets this workflow needs. Never commit any of them:
+#   CENTRAL_TOKEN_USERNAME  user token name from central.sonatype.com > Account > Generate User Token
+#   CENTRAL_TOKEN_PASSWORD  user token password from the same page
+#   GPG_PRIVATE_KEY         ASCII-armored private key: gpg --armor --export-secret-keys <KEYID>
+#   GPG_PASSPHRASE          the passphrase of that key
+# The public half of the key must be on a public key server (keys.openpgp.org), and the
+# com.dominaite namespace must be verified on central.sonatype.com, or Central refuses the upload.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+          cache: maven
+          # Writes a settings.xml server "central" that reads the token from these env names.
+          server-id: central
+          server-username: CENTRAL_TOKEN_USERNAME
+          server-password: CENTRAL_TOKEN_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      - name: Refuse a tag that disagrees with the pom version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          pom_version=$(./mvnw -B -q help:evaluate -Dexpression=project.version -DforceStdout)
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$pom_version" != "$tag_version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match pom version $pom_version. Bump the pom or retag."
+            exit 1
+          fi
+
+      # The release profile adds sources, javadoc, GPG signatures and the Central upload.
+      # deploy runs the full test suite before it uploads anything.
+      - name: Test, sign and publish
+        run: ./mvnw -B -P release deploy
+        env:
+          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
