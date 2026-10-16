@@ -126,8 +126,10 @@ CheckoutSession session = client.createCheckoutSession(CheckoutSessionRequest.bu
 // cashier token to the page that shows the widget.
 ```
 
-`customer` is optional. Send what your checkout already collected: name, email and phone. The
-widget does not ask the payer for a field that you send.
+`customer` is optional. Send what your checkout already collected: name, email, phone and the
+billing address (`address`, `city`, `postalCode`, and `state` for the United States, Canada and
+Australia). The widget does not ask the payer for a field that you send. A value that is too long
+fails with 400 `VALIDATION_ERROR`, code `MAX_LENGTH`.
 
 Show the widget with the two cashier values:
 
