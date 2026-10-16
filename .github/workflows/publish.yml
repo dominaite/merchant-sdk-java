@@ -1,6 +1,6 @@
 name: Publish to Maven Central
 
-# Tag push = release. The tag must match the pom version (v0.5.1 for 0.5.1).
+# Tag push = release. The tag must match the pom version (v0.5.2 for 0.5.2).
 #
 # Repository secrets this workflow needs. Never commit any of them:
 #   CENTRAL_TOKEN_USERNAME  user token name from central.sonatype.com > Account > Generate User Token

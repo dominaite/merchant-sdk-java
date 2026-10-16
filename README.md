@@ -16,14 +16,14 @@ Maven:
 <dependency>
   <groupId>com.dominaite</groupId>
   <artifactId>merchant-sdk</artifactId>
-  <version>0.5.1</version>
+  <version>0.5.2</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.dominaite:merchant-sdk:0.5.1'
+implementation 'com.dominaite:merchant-sdk:0.5.2'
 ```
 
 The package is `com.dominaite.merchant`. The JAR has the automatic module name

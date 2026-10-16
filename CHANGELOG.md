@@ -1,9 +1,19 @@
 # Changelog
 
-## 0.5.1
+## 0.5.2
 
-The first release of the Java SDK. It has the same API surface as version 0.5.1 of the Node,
-Python, Go, .NET, PHP and Rust SDKs.
+The first release of the Java SDK. It has the same API surface as version 0.5.2 of the Node,
+Python, Go, .NET, PHP and Rust SDKs. The 0.5.1 entry below lists what it has from that version.
+
+### Added
+
+- Billing address on the payer: `Customer.address`, `city`, `postalCode` and `state`, all
+  optional. Address is one line, at most 200 characters; city at most 100; postal code at most
+  20. State is the state or province code, at most 50 characters, and only used for the United
+  States, Canada and Australia. The widget does not ask the payer for a field that you send. A
+  value that is too long fails with 400 `VALIDATION_ERROR`, code `MAX_LENGTH`.
+
+## 0.5.1
 
 ### Added
 
