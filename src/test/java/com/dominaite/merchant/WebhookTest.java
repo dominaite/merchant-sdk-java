@@ -198,6 +198,28 @@ class WebhookTest {
             .getCharge().getPaymentMethod());
     }
 
+    static Stream<Arguments> wrongShapedCards() {
+        return Stream.of(
+            Arguments.of("\"visa\""),
+            Arguments.of("\"\""),
+            Arguments.of("[\"visa\",\"4242\"]"),
+            Arguments.of("{\"brand\":{\"name\":\"visa\"},\"last4\":\"4242\"}"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("wrongShapedCards")
+    void aSignedChargeEventWithAWrongShapedCardStillVerifies(String card) {
+        String charge = "{\"id\":\"e5\",\"type\":\"charge.succeeded\",\"data\":{\"chargeId\":\"ch_1\","
+            + "\"amount\":999,\"currency\":\"EUR\",\"paymentMethod\":" + card + "}}";
+        WebhookEvent event = assertDoesNotThrow(
+            () -> Webhooks.verifyAndParse(charge, "t=" + TS + ",v1=" + sign(TS, charge), SECRET, TOL, TIMESTAMP));
+        ChargeEventData data = event.getCharge();
+        assertNull(data.getPaymentMethod());
+        assertEquals("ch_1", data.getChargeId());
+        assertEquals(999, data.getAmount());
+        assertEquals(card, data.getRaw().get("paymentMethod").toString());
+    }
+
     @Test
     void aBodyThatIsNotAnEnvelopeIsMalformedPayload() {
         String body = "[1,2]";
