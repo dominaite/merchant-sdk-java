@@ -16,14 +16,14 @@ Maven:
 <dependency>
   <groupId>com.dominaite</groupId>
   <artifactId>merchant-sdk</artifactId>
-  <version>0.5.2</version>
+  <version>0.6.0</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.dominaite:merchant-sdk:0.5.2'
+implementation 'com.dominaite:merchant-sdk:0.6.0'
 ```
 
 The package is `com.dominaite.merchant`. The JAR has the automatic module name
@@ -78,11 +78,14 @@ key section, ask Dominaite support for the key. Every key can call `ping()` and
 
 | Environment | Base URL |
 |---|---|
-| Production | `https://api.dominaite.com/payments` (the default) |
-| Dev / staging | the base URL of that environment |
+| Sandbox | `https://api.staging.dominaite.com/payments` (`DominaiteClient.SANDBOX_BASE_URL`) |
+| Production | `https://api.dominaite.com/payments` (`DominaiteClient.PRODUCTION_BASE_URL`) |
 
-Confirm the host for your environment before the first call. Keys are issued per environment, so
-**a dev key against production always fails with `INVALID_API_KEY`**.
+The base URL is required: there is no default. A missing, empty or whitespace-only `baseUrl`
+throws `ValidationException` when you build the client. Keys are issued per environment, so
+**a sandbox key against production always fails with `INVALID_API_KEY`**.
+
+`DominaiteClient.DEFAULT_BASE_URL` is removed in 0.6.0. Use `DominaiteClient.PRODUCTION_BASE_URL`.
 
 The prefix of the base URL is never part of the signed path. On production you POST to
 `https://api.dominaite.com/payments/merchant-api/checkout/sessions`, but you sign
@@ -93,9 +96,8 @@ The prefix of the base URL is never part of the signed path. On production you P
 ```sh
 export DOMINAITE_KEY_ID=dmk_...      # Website integration tab
 export DOMINAITE_SECRET=dms_...      # shown once when you generated the key
-# Production needs no DOMINAITE_BASE_URL.
-# For a test environment, set it to the base URL of that environment:
-# export DOMINAITE_BASE_URL=https://...
+# Required. The sandbox, or https://api.dominaite.com/payments for production:
+export DOMINAITE_BASE_URL=https://api.staging.dominaite.com/payments
 ```
 
 ```java
@@ -104,7 +106,7 @@ import com.dominaite.merchant.*;
 DominaiteClient client = DominaiteClient.builder()
     .keyId(System.getenv("DOMINAITE_KEY_ID"))
     .secret(System.getenv("DOMINAITE_SECRET"))
-    // An unset variable is null, and null keeps the production default.
+    // Required. An unset variable is null, and build() throws on it.
     .baseUrl(System.getenv("DOMINAITE_BASE_URL"))
     .build();
 
@@ -203,15 +205,20 @@ signing. A 503 means retry later.
 
 ## Client options
 
-`DominaiteClient.builder().keyId(...).secret(...).build()` gives you production with a 45 second
-timeout. The builder takes more:
+`DominaiteClient.builder().keyId(...).secret(...).baseUrl(...).build()` gives you a client on that
+base URL with a 45 second timeout. The builder takes:
 
 | Option | What |
 |---|---|
-| `baseUrl` | Point the client at a non-production environment. The builder ignores null, empty and whitespace-only values, so an unset environment variable gives you production. |
+| `baseUrl` | Required. `DominaiteClient.SANDBOX_BASE_URL` or `DominaiteClient.PRODUCTION_BASE_URL`, or your own value. Null, empty or whitespace throws `ValidationException`. Must be `https://`; `http://` only for localhost, 127.0.0.1 and ::1. |
 | `timeout` | The timeout for each request. The default is 45 seconds, because serverless cold starts can take 10 seconds or more. |
-| `userAgentSuffix` | Adds your identifier to the User-Agent of the SDK. This helps when support reads the access logs. |
+| `userAgentSuffix` | Adds your identifier to the User-Agent, after one space. This helps when support reads the access logs. A control character throws `ValidationException`. |
+| `onWarning` | A `Consumer<String>` for the SDK's warnings. See [Logging and warnings](#logging-and-warnings). |
+| `onDebug` | A `Consumer<String>` that switches the debug log on. Off by default. See [Logging and warnings](#logging-and-warnings). |
 | `httpClient` | Your own `java.net.http.HttpClient`, for a proxy or your own executor. Build it with `followRedirects(HttpClient.Redirect.NEVER)`. The SDK still sets `timeout` on each request. |
+
+The SDK sends the User-Agent `dominaite-java/<version> (java <java.version>)`, for example
+`dominaite-java/0.6.0 (java 21.0.4)`, then your suffix.
 
 Make one client for each process. The client is thread-safe and holds one `HttpClient` with its
 connection pool.
@@ -220,6 +227,34 @@ The client that the SDK builds never follows a redirect, and it treats any 3xx a
 is not retryable. The Dominaite API never redirects. A 3xx means that something in front of the API
 answered. If the client followed it, it would send your signed request again to the host that the
 redirect names.
+
+## Logging and warnings
+
+The SDK writes nothing by itself except warnings. Warnings go to `onWarning`, or without it to
+`System.getLogger("com.dominaite.merchant")` at `WARNING`. You get a warning when:
+
+- the API marks your SDK version as deprecated with the `Dominaite-Sdk-Notice` response header.
+  The SDK reads it on every response and warns once for each distinct notice, for example
+  `dominaite-java 0.6.0 is deprecated; upgrade to 0.7.0 (sunset 2027-01-31). https://...`;
+- `createCheckoutSessionWithRetry` retries after a failure;
+- `ping()` reports a clock skew over 60 seconds.
+
+`onDebug` switches on the debug log, one line per HTTP request: the method, the path, the status,
+the time in milliseconds, the `Dominaite-Request-Id` response header and the idempotency key.
+Give the request id to support when you ask about a call.
+
+```java
+DominaiteClient client = DominaiteClient.builder()
+    .keyId(System.getenv("DOMINAITE_KEY_ID"))
+    .secret(System.getenv("DOMINAITE_SECRET"))
+    .baseUrl(System.getenv("DOMINAITE_BASE_URL"))
+    .onWarning(message -> log.warn(message))
+    .onDebug(line -> log.debug(line))   // leave out in production
+    .build();
+```
+
+No line holds the secret, the signature, a cashier token, a query string or a request or
+response body. An exception thrown by your hook is dropped and never fails the call.
 
 ## Amounts are minor units
 

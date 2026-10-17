@@ -40,7 +40,7 @@ final class GuideSamples {
 
     // Guide sample 1.
     static void clients() {
-        // The SDK reads no environment variables. Without baseUrl, the SDK calls production.
+        // The SDK reads no environment variables. baseUrl is required: the sandbox here.
         DominaiteClient payments = DominaiteClient.builder()
             .keyId(System.getenv("DOMINAITE_KEY_ID"))              // payments key
             .secret(System.getenv("DOMINAITE_SECRET"))

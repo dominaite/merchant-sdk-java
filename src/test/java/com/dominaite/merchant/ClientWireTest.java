@@ -45,7 +45,8 @@ class ClientWireTest {
             assertEquals(MockServer.KEY_ID, request.header("X-Api-Key-Id"));
             assertEquals("checkout-order-1042-8440-EUR", request.header("Idempotency-Key"));
             assertEquals("application/json", request.header("Content-Type"));
-            assertEquals("dominaite-java/" + DominaiteClient.VERSION, request.header("User-Agent"));
+            assertEquals(DominaiteClient.builder().keyId(MockServer.KEY_ID).secret(MockServer.SECRET)
+                .baseUrl(server.baseUrl()).build().getUserAgent(), request.header("User-Agent"));
             assertEquals("{\"amount\":8440,\"currency\":\"EUR\",\"orderReference\":\"order-1042\"}", request.body);
             assertTrue(Math.abs(Long.parseLong(request.header("X-Timestamp")) - Instant.now().getEpochSecond()) < 5);
             // The base URL's /payments prefix is not part of the signed path.
@@ -354,23 +355,76 @@ class ClientWireTest {
     }
 
     @Test
-    void theBaseUrlDefaultsToProductionAndLosesTrailingSlashes() {
-        DominaiteClient client = DominaiteClient.builder().keyId(MockServer.KEY_ID).secret(MockServer.SECRET)
-            .baseUrl("  ").build();
-        assertEquals("https://api.dominaite.com/payments", client.getBaseUrl());
+    void aMissingOrBlankBaseUrlIsRefusedWithBothUrlsInTheMessage() {
+        String expected = "baseUrl is required. Use https://api.staging.dominaite.com/payments for the sandbox"
+            + " or https://api.dominaite.com/payments for production.";
 
+        ValidationException unset = assertThrows(ValidationException.class,
+            () -> DominaiteClient.builder().keyId(MockServer.KEY_ID).secret(MockServer.SECRET).build());
+        assertEquals(expected, unset.getMessage());
+
+        for (String blank : Arrays.asList(null, "", "  ", "\t\n", "/", " // ")) {
+            ValidationException error = assertThrows(ValidationException.class,
+                () -> DominaiteClient.builder().keyId(MockServer.KEY_ID).secret(MockServer.SECRET)
+                    .baseUrl(blank).build(), "baseUrl " + blank);
+            assertEquals(expected, error.getMessage());
+        }
+    }
+
+    @Test
+    void theNamedBaseUrlsAreTheSandboxAndProduction() {
+        assertEquals("https://api.staging.dominaite.com/payments", DominaiteClient.SANDBOX_BASE_URL);
+        assertEquals("https://api.dominaite.com/payments", DominaiteClient.PRODUCTION_BASE_URL);
+
+        for (String base : Arrays.asList(DominaiteClient.SANDBOX_BASE_URL, DominaiteClient.PRODUCTION_BASE_URL)) {
+            DominaiteClient client = DominaiteClient.builder().keyId(MockServer.KEY_ID).secret(MockServer.SECRET)
+                .baseUrl(base).build();
+            assertEquals(base, client.getBaseUrl());
+        }
+    }
+
+    @Test
+    void anExplicitBaseUrlIsUsedForTheRequest() throws Exception {
+        try (MockServer server = new MockServer()) {
+            server.respondData(200, "{\"merchantId\":\"m\",\"clockSkewSeconds\":0}");
+            DominaiteClient client = DominaiteClient.builder().keyId(MockServer.KEY_ID).secret(MockServer.SECRET)
+                .baseUrl(server.baseUrl() + "/").build();
+            client.ping();
+            assertEquals("/payments/merchant-api/ping", server.last().path);
+        }
+    }
+
+    @Test
+    void theBaseUrlLosesWhitespaceAndTrailingSlashes() {
         DominaiteClient custom = DominaiteClient.builder().keyId(MockServer.KEY_ID).secret(MockServer.SECRET)
-            .baseUrl("https://dev.example/api//").userAgentSuffix("shop/1.2").timeout(Duration.ofSeconds(5)).build();
+            .baseUrl("  https://dev.example/api//  ").userAgentSuffix("shop/1.2").timeout(Duration.ofSeconds(5)).build();
         assertEquals("https://dev.example/api", custom.getBaseUrl());
-        assertEquals("dominaite-java/" + DominaiteClient.VERSION + " shop/1.2", custom.getUserAgent());
+        assertTrue(custom.getUserAgent().endsWith(") shop/1.2"), custom.getUserAgent());
         assertFalse(custom.toString().contains(MockServer.SECRET));
+    }
+
+    @Test
+    void plainHttpIsRefusedOutsideLoopback() {
+        for (String base : Arrays.asList("http://api.dominaite.com/payments", "HTTP://shop.example", "ftp://x.example",
+                "api.dominaite.com/payments")) {
+            ValidationException error = assertThrows(ValidationException.class,
+                () -> DominaiteClient.builder().keyId(MockServer.KEY_ID).secret(MockServer.SECRET)
+                    .baseUrl(base).build(), base);
+            assertTrue(error.getMessage().startsWith("baseUrl must use https://"), error.getMessage());
+        }
+        for (String base : Arrays.asList("http://localhost:8080", "http://127.0.0.1:1", "http://[::1]:9000/x",
+                "HTTPS://API.DOMINAITE.COM/payments")) {
+            DominaiteClient.builder().keyId(MockServer.KEY_ID).secret(MockServer.SECRET).baseUrl(base).build();
+        }
     }
 
     @Test
     void wrongCredentialPrefixesAreRefused() {
         assertThrows(ValidationException.class,
-            () -> DominaiteClient.builder().keyId("key").secret(MockServer.SECRET).build());
+            () -> DominaiteClient.builder().keyId("key").secret(MockServer.SECRET)
+                .baseUrl(DominaiteClient.SANDBOX_BASE_URL).build());
         assertThrows(ValidationException.class,
-            () -> DominaiteClient.builder().keyId(MockServer.KEY_ID).secret("secret").build());
+            () -> DominaiteClient.builder().keyId(MockServer.KEY_ID).secret("secret")
+                .baseUrl(DominaiteClient.SANDBOX_BASE_URL).build());
     }
 }

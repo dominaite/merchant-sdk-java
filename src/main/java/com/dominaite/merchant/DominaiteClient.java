@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 /**
@@ -32,14 +34,17 @@ import java.util.regex.Pattern;
  */
 public final class DominaiteClient {
 
-    /** Production. The default when no base URL is set. */
-    public static final String DEFAULT_BASE_URL = "https://api.dominaite.com/payments";
+    /** The sandbox merchant API. Use it with your sandbox keys. */
+    public static final String SANDBOX_BASE_URL = "https://api.staging.dominaite.com/payments";
+
+    /** The production merchant API. Use it with your live keys. */
+    public static final String PRODUCTION_BASE_URL = "https://api.dominaite.com/payments";
 
     /** The default per-request timeout. Cold starts outside production can take 10+ seconds. */
     public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(45);
 
     /** The SDK version, also sent in the User-Agent. */
-    public static final String VERSION = "0.5.2";
+    public static final String VERSION = "0.6.0";
 
     public static final String SESSIONS_PATH = "/merchant-api/checkout/sessions";
     public static final String PING_PATH = "/merchant-api/ping";
@@ -63,6 +68,7 @@ public final class DominaiteClient {
     private final Duration timeout;
     private final String userAgent;
     private final HttpClient http;
+    private final Diagnostics diagnostics;
 
     private DominaiteClient(Builder b) {
         if (b.keyId == null || !b.keyId.startsWith(KEY_ID_PREFIX)) {
@@ -78,16 +84,31 @@ public final class DominaiteClient {
         while (base.endsWith("/")) {
             base = base.substring(0, base.length() - 1);
         }
-        this.baseUrl = base.isEmpty() ? DEFAULT_BASE_URL : base;
+        // There is no default base URL. A fallback to production would turn an unset environment
+        // variable into sandbox keys sent to production.
+        if (base.isEmpty()) {
+            throw new ValidationException("baseUrl is required. Use " + SANDBOX_BASE_URL
+                + " for the sandbox or " + PRODUCTION_BASE_URL + " for production.");
+        }
+        requireEncryptedTransport(base);
+        this.baseUrl = base;
 
         if (b.timeout == null || b.timeout.isZero() || b.timeout.isNegative()) {
             throw new ValidationException("timeout must be positive");
         }
         this.timeout = b.timeout;
 
-        this.userAgent = b.userAgentSuffix == null || b.userAgentSuffix.trim().isEmpty()
-            ? "dominaite-java/" + VERSION
-            : "dominaite-java/" + VERSION + " " + b.userAgentSuffix.trim();
+        String suffix = b.userAgentSuffix == null ? "" : b.userAgentSuffix.trim();
+        for (int i = 0; i < suffix.length(); i++) {
+            char c = suffix.charAt(i);
+            if (c < 0x20 || c == 0x7F) {
+                throw new ValidationException("userAgentSuffix must not contain control characters");
+            }
+        }
+        String product = "dominaite-java/" + VERSION + " (java " + System.getProperty("java.version", "unknown") + ")";
+        this.userAgent = suffix.isEmpty() ? product : product + " " + suffix;
+
+        this.diagnostics = new Diagnostics(b.onWarning, b.onDebug);
 
         // The API never redirects. Following a 3xx would replay a signed request at whatever
         // host the redirect names, so the client the SDK builds never follows one.
@@ -108,7 +129,10 @@ public final class DominaiteClient {
         return baseUrl;
     }
 
-    /** The User-Agent this client sends. */
+    /**
+     * The User-Agent this client sends: {@code dominaite-java/<version> (java <java.version>)},
+     * then the {@link Builder#userAgentSuffix suffix} when set.
+     */
     public String getUserAgent() {
         return userAgent;
     }
@@ -129,7 +153,9 @@ public final class DominaiteClient {
     public PingResponse ping() {
         Reply reply = send("GET", PING_PATH, "", "", "");
         reply.failOnError();
-        return reply.read(reply.payload(), PingResponse.class, "ping");
+        PingResponse ping = reply.read(reply.payload(), PingResponse.class, "ping");
+        diagnostics.clockSkew(ping.getClockSkewSeconds());
+        return ping;
     }
 
     /**
@@ -223,6 +249,7 @@ public final class DominaiteClient {
                 }
                 last = error;
                 if (attempt + 1 < attempts) {
+                    diagnostics.retrying("createCheckoutSessionWithRetry", error, attempt + 2, attempts);
                     sleep(baseDelay.multipliedBy(1L << Math.min(attempt, 16)));
                 }
             }
@@ -519,6 +546,33 @@ public final class DominaiteClient {
 
     // ---------------------------------------------------------------- transport
 
+    /**
+     * Refuses a base URL that would put the signed request on the wire in clear text. Plain
+     * {@code http://} is allowed only for localhost, 127.0.0.1 and ::1, for local mock servers.
+     */
+    private static void requireEncryptedTransport(String baseUrl) {
+        URI uri;
+        try {
+            uri = new URI(baseUrl);
+        } catch (URISyntaxException e) {
+            throw new ValidationException("baseUrl is not a valid URL: " + baseUrl);
+        }
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+        if (scheme.equals("https")) {
+            return;
+        }
+        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+        if (host.startsWith("[") && host.endsWith("]")) {
+            host = host.substring(1, host.length() - 1);
+        }
+        if (scheme.equals("http") && (host.equals("localhost") || host.equals("127.0.0.1") || host.equals("::1"))) {
+            return;
+        }
+        throw new ValidationException("baseUrl must use https:// (http:// is allowed only for localhost, "
+            + "127.0.0.1 and ::1). Anywhere else it would send your key id, signature and request body "
+            + "in clear text.");
+    }
+
     private Reply send(String method, String path, String query, String body, String idempotencyKey) {
         String timestamp = Long.toString(Instant.now().getEpochSecond());
         // The signed path is the canonical path only: never the base URL's own prefix, never
@@ -551,19 +605,27 @@ public final class DominaiteClient {
         }
 
         HttpResponse<String> response;
+        long started = System.nanoTime();
         try {
             response = http.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         } catch (HttpTimeoutException e) {
+            diagnostics.request(method, path, null, System.nanoTime() - started, null, idempotencyKey);
             throw new TransportException(
                 "The Dominaite API did not answer in time; retry with the same idempotency key.", null, null, e);
         } catch (IOException e) {
+            diagnostics.request(method, path, null, System.nanoTime() - started, null, idempotencyKey);
             throw new TransportException("Could not reach the Dominaite API: " + e.getMessage(), null, null, e);
         } catch (InterruptedException e) {
+            diagnostics.request(method, path, null, System.nanoTime() - started, null, idempotencyKey);
             Thread.currentThread().interrupt();
             throw new TransportException("The call to the Dominaite API was interrupted.", null, null, e);
         }
 
         int status = response.statusCode();
+        // Every response, success or error, can carry the request id and the SDK notice.
+        diagnostics.request(method, path, status, System.nanoTime() - started,
+            response.headers().firstValue(Diagnostics.REQUEST_ID_HEADER).orElse(null), idempotencyKey);
+        diagnostics.notice(response.headers().firstValue(Diagnostics.NOTICE_HEADER).orElse(null));
         // The API never redirects. A 3xx is a hard error, never retried.
         if (status >= 300 && status < 400) {
             throw new ApiException(status, null,
@@ -942,7 +1004,7 @@ public final class DominaiteClient {
 
     // ---------------------------------------------------------------- builder
 
-    /** Builds a {@link DominaiteClient}. keyId and secret are required. */
+    /** Builds a {@link DominaiteClient}. keyId, secret and baseUrl are required. */
     public static final class Builder {
 
         private String keyId;
@@ -951,6 +1013,8 @@ public final class DominaiteClient {
         private Duration timeout = DEFAULT_TIMEOUT;
         private String userAgentSuffix;
         private HttpClient httpClient;
+        private Consumer<String> onWarning;
+        private Consumer<String> onDebug;
 
         private Builder() {
         }
@@ -968,11 +1032,36 @@ public final class DominaiteClient {
         }
 
         /**
-         * The API to call. Null, empty and blank values give production. Trailing slashes are
-         * trimmed. The base URL's own prefix is never part of the signed path.
+         * The API to call: {@link #SANDBOX_BASE_URL}, {@link #PRODUCTION_BASE_URL} or your own
+         * value. Required: {@link Builder#build()} throws {@link ValidationException} when it is
+         * null, empty or blank. It must be {@code https://}; {@code http://} is accepted only for
+         * localhost, 127.0.0.1 and ::1. Trailing slashes are trimmed. The base URL's own prefix
+         * is never part of the signed path.
          */
         public Builder baseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
+            return this;
+        }
+
+        /**
+         * Receives the SDK's warnings: a deprecation notice from the API (once per distinct
+         * notice), a retry in {@link #createCheckoutSessionWithRetry}, and a ping clock skew over
+         * 60 seconds. Without a hook they go to {@code System.getLogger("com.dominaite.merchant")}
+         * at WARNING. An exception from the hook is dropped, never thrown at the caller.
+         */
+        public Builder onWarning(Consumer<String> onWarning) {
+            this.onWarning = onWarning;
+            return this;
+        }
+
+        /**
+         * Switches the debug log on: one line per HTTP request with the method, the path, the
+         * status, the time in milliseconds, the {@code Dominaite-Request-Id} response header and
+         * the idempotency key. Off when unset. A line never holds the secret, the signature, a
+         * cashier token or a body. An exception from the hook is dropped.
+         */
+        public Builder onDebug(Consumer<String> onDebug) {
+            this.onDebug = onDebug;
             return this;
         }
 
@@ -982,7 +1071,11 @@ public final class DominaiteClient {
             return this;
         }
 
-        /** Appended to the User-Agent. It helps Dominaite support find your calls in the logs. */
+        /**
+         * Appended to the User-Agent after one space. It helps Dominaite support find your calls
+         * in the logs. Trimmed; blank means none. A control character fails {@link #build()} with
+         * {@link ValidationException}.
+         */
         public Builder userAgentSuffix(String userAgentSuffix) {
             this.userAgentSuffix = userAgentSuffix;
             return this;
