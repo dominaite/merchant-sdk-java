@@ -296,6 +296,22 @@ class ClientWireTest {
     }
 
     @Test
+    void aPlanWithoutAPositiveAmountIsRefusedBeforeSending() throws Exception {
+        try (MockServer server = new MockServer()) {
+            DominaiteClient client = server.client();
+
+            ValidationException unset = assertThrows(ValidationException.class, () -> client.createPlan(
+                CreatePlanRequest.builder().name("Gold").currency("EUR").intervalUnit(IntervalUnits.MONTH)
+                    .idempotencyKey("plan-1").build()));
+            assertTrue(unset.getMessage().contains("amount"));
+            assertThrows(ValidationException.class, () -> client.createPlan(
+                CreatePlanRequest.builder().name("Gold").amount(-1).currency("EUR").intervalUnit(IntervalUnits.MONTH)
+                    .idempotencyKey("plan-1").build()));
+            assertEquals(0, server.requests().size());
+        }
+    }
+
+    @Test
     void anEmptyPlanUpdateIsRefusedBeforeSending() throws Exception {
         try (MockServer server = new MockServer()) {
             assertThrows(ValidationException.class,

@@ -387,6 +387,10 @@ public final class DominaiteClient {
     public Plan createPlan(CreatePlanRequest request) {
         Objects.requireNonNull(request, "request");
         String key = IdempotencyKeys.validate(request.getIdempotencyKey());
+        // An unset amount is 0, which the gateway refuses. Fail before sending.
+        if (request.getAmount() <= 0) {
+            throw new ValidationException("amount must be a positive integer in MINOR units (e.g. 999 for 9.99 EUR)");
+        }
         String body = Json.body(request, request.getExtra());
         Reply reply = withKey(key, () -> send("POST", PLANS_PATH, "", body, key));
         return withKey(key, () -> reply.read(reply.readObject("plan"), Plan.class, "plan"));
