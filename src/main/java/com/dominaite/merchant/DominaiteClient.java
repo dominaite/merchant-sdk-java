@@ -495,7 +495,9 @@ public final class DominaiteClient {
      *
      * <p>The client never retries this call. A replay of a create that already succeeded
      * answers without the secret, so an automatic retry could lose it. On a
-     * {@link TransportException}, list the endpoints before you create again.
+     * {@link TransportException}, retry with the same key. If the answer has no secret
+     * ({@link WebhookEndpoint#getSecret()} is null), delete that endpoint and create it again
+     * with a new key.
      */
     public WebhookEndpoint createWebhookEndpoint(CreateWebhookEndpointRequest request) {
         Objects.requireNonNull(request, "request");

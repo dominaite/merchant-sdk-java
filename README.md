@@ -690,10 +690,9 @@ WebhookEndpoint endpoint = client.createWebhookEndpoint(CreateWebhookEndpointReq
 storeWebhookSecret(endpoint.getSecret()); // whsec_...
 ```
 
-Store the secret at once. Only the first answer has it: a retry with the same key returns the
-endpoint without it. That is why the client never retries this call. After a `TransportException`,
-call `listWebhookEndpoints` before you register again. If you lose the secret, delete the endpoint
-and register it again.
+Store the secret at once. A replay of a create that already succeeded answers without it, so the
+client never retries this call. After a timeout or another `TransportException`, retry with the
+same key. If the answer has no secret, delete that endpoint and create it again with a new key.
 `listWebhookEndpoints` lists your endpoints, and `deleteWebhookEndpoint` removes one.
 
 ## Status polling
