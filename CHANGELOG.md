@@ -7,10 +7,10 @@
 - The client retries by itself. `Builder.maxRetries(int)` sets the count, default 2 (3 attempts),
   for every GET call and every POST call with an idempotency key. It retries a transport failure,
   a 5xx without a code of the route and `PAYMENT_PROCESSING_UNAVAILABLE`, never a 429. The wait
-  before retry n is random between 0 and 500 ms x 2^n, at most 8 seconds. The timeout is per
-  attempt, so one call can now wait up to (maxRetries + 1) x timeout plus the waits. Set
-  `maxRetries(0)` to send every call once, as before. `createWebhookEndpoint`, `updatePlan` and
-  the DELETE calls are never retried.
+  before retry n is random between 0 and 500 ms x 2^n, at most 8 seconds. n starts at 0, so the
+  first wait is at most 500 ms. The timeout is per attempt, so one call can now wait up to
+  (maxRetries + 1) x timeout plus the waits. Set `maxRetries(0)` to send every call once, as
+  before. `createWebhookEndpoint`, `updatePlan` and the DELETE calls are never retried.
 - A charge answered 404 with a code (`PAYMENT_METHOD_NOT_FOUND`, `AGREEMENT_NOT_FOUND`) throws
   `ChargeException`, not a plain `ApiException`. `ChargeException` already extends `ApiException`,
   so a `catch (ApiException e)` still catches it. Check the order of your catch blocks and
@@ -22,6 +22,9 @@
   unset amount was sent as 0.
 - `ErrorCodes.CHARGE`, `ErrorCodes.SESSION_REFUSALS` and `ErrorCodes.REFUND` list every code the
   gateway sends on these routes. Code that compares them to a fixed list sees more entries.
+- `createCheckoutSession` and `chargePaymentMethod` throw `ValidationException` and send nothing
+  when the currency is not 3 upper case letters, for example `eur`. The gateway refused it with
+  a 400.
 
 ### Added
 
@@ -30,14 +33,12 @@
   body. Production sends only the body field today. An error without a JSON body takes the header.
 - `DominaiteClient.DEFAULT_MAX_RETRIES`, `RETRY_BASE_DELAY`, `RETRY_MAX_DELAY` and
   `getMaxRetries()`.
-- `ChargeEventData.getPaymentMethod()`: the brand and last four digits of a `charge.*` event.
+- `ChargeEventData.getPaymentMethod()`: the brand and last four digits of a `charge.*` event. It
+  is null when the field has an unexpected shape, and the event still verifies.
 - `ErrorCodes` constants for the charge, agreement, plan, webhook, validation and generic codes,
   and the lists `AUTHENTICATION`, `IDEMPOTENCY`, `TRANSIENT`, `VALIDATION`, `RECURRING` and
   `WEBHOOK`. A test pins them to the vendored wire contract.
 - `WebhookEventTypes.RECURRING`: the subscription events, in the contract's order.
-
-- `createCheckoutSession` and `chargePaymentMethod` throw `ValidationException` and send nothing
-  when the currency is not 3 upper case letters. The gateway refused it with a 400.
 
 ### Fixed
 
