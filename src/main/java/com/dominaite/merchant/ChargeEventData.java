@@ -19,6 +19,7 @@ public final class ChargeEventData {
     private Integer attemptNumber;
     private long amount;
     private String currency;
+    private ChargeEventPaymentMethod paymentMethod;
     private String orderReference;
     private String description;
     private String declineClass;
@@ -70,6 +71,11 @@ public final class ChargeEventData {
 
     public String getCurrency() {
         return currency;
+    }
+
+    /** The charged card, or null when the event has none. */
+    public ChargeEventPaymentMethod getPaymentMethod() {
+        return paymentMethod;
     }
 
     public String getOrderReference() {
