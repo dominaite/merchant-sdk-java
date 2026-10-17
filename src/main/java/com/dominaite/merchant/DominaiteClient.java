@@ -858,7 +858,7 @@ public final class DominaiteClient {
                     throw error;
                 }
                 diagnostics.retrying(method, error, retry + 2, retries + 1);
-                sleep(backoff(retry, baseDelay, random.getAsDouble()));
+                sleep(backoff(retry, baseDelay, random.getAsDouble()), error);
             }
         }
     }
@@ -888,12 +888,23 @@ public final class DominaiteClient {
         return Duration.ofMillis((long) (random * Math.min(ceiling, cap)));
     }
 
-    private void sleep(Duration delay) {
+    /**
+     * Waits before the next attempt. An interrupt restores the interrupt flag and throws a
+     * {@link TransportException} caused by {@code failure}, with its status, code, idempotency
+     * key and request id, so the caller can still retry with the same key.
+     */
+    private void sleep(Duration delay, DominaiteException failure) {
         try {
             sleeper.sleep(delay);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new TransportException("The retry wait was interrupted.", null, null, e);
+            TransportException interrupted = new TransportException(
+                "The retry wait was interrupted.",
+                failure.getHttpStatus(), failure.getCode(), failure);
+            interrupted.addSuppressed(e);
+            interrupted.setIdempotencyKey(failure.getIdempotencyKey());
+            interrupted.setRequestId(failure.getRequestId());
+            throw interrupted;
         }
     }
 

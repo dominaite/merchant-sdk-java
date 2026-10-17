@@ -1,6 +1,7 @@
 package com.dominaite.merchant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -207,6 +208,35 @@ class RetryTest {
 
             assertEquals("B", error.getCode());
             assertEquals(2, server.requests().size());
+        }
+    }
+
+    @Test
+    void anInterruptedWaitKeepsTheFailureTheKeyAndTheRequestIdAndTheInterruptFlag() throws Exception {
+        try (MockServer server = new MockServer()) {
+            server.respondError(503, "PAYMENT_PROCESSING_UNAVAILABLE", "off").respondData(201, CHARGE);
+            InterruptedException interrupt = new InterruptedException("stop");
+            DominaiteClient client = server.builder().sleeper(delay -> {
+                throw interrupt;
+            }).build();
+
+            TransportException error;
+            try {
+                error = assertThrows(TransportException.class,
+                    () -> client.chargePaymentMethod(PM, ErrorMappingTest.charge()));
+            } finally {
+                // Read and clear the flag, so it cannot leak into the next test.
+                assertTrue(Thread.interrupted());
+            }
+
+            assertEquals(1, server.requests().size());
+            assertEquals("charge-1043", error.getIdempotencyKey());
+            assertEquals("req-123", error.getRequestId());
+            assertEquals(Integer.valueOf(503), error.getHttpStatus());
+            assertEquals("PAYMENT_PROCESSING_UNAVAILABLE", error.getCode());
+            assertTrue(error.getCause() instanceof ChargeException);
+            assertEquals("req-123", ((DominaiteException) error.getCause()).getRequestId());
+            assertSame(interrupt, error.getSuppressed()[0]);
         }
     }
 
