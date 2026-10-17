@@ -189,6 +189,25 @@ class ClientWireTest {
     }
 
     @Test
+    void anUppercasePaymentMethodIdIsSignedAsTheLowercaseIdTheGatewaySigns() throws Exception {
+        try (MockServer server = new MockServer()) {
+            server.respondData(201, "{\"chargeId\":\"ch_1\",\"status\":\"succeeded\",\"transactionId\":\"" + TX
+                + "\",\"sequence\":0}").respond(204, "");
+            DominaiteClient client = server.client();
+
+            client.chargePaymentMethod("PM_0123456789ABCDEF0123456789ABCDEF", ChargeRequest.builder().amount(100)
+                .currency("EUR").orderReference("order-1").idempotencyKey("charge-1").build());
+            assertEquals("/merchant-api/payment-methods/pm_0123456789abcdef0123456789abcdef/charges",
+                server.last().canonicalPath());
+            assertEquals(server.last().expectedSignature(), server.last().header("X-Signature"));
+
+            client.revokePaymentMethod(" pm_0123456789ABCDEF0123456789abcdef ");
+            assertEquals("/merchant-api/payment-methods/pm_0123456789abcdef0123456789abcdef",
+                server.last().canonicalPath());
+        }
+    }
+
+    @Test
     void aRevokeIsADeleteWithoutKeyOrBodyAndA204IsSuccess() throws Exception {
         try (MockServer server = new MockServer()) {
             server.respond(204, "");
