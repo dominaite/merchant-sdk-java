@@ -49,9 +49,7 @@ class ContractTest {
     @Test
     void theRecurringEventsMatchTheWireContract() throws IOException {
         assertEquals(strings(fixture("merchant-api-wire-contract.json").get("recurringWebhookEvents")),
-            List.of(WebhookEventTypes.AGREEMENT_ACTIVATED, WebhookEventTypes.AGREEMENT_PAST_DUE,
-                WebhookEventTypes.AGREEMENT_CANCELLED, WebhookEventTypes.CHARGE_SUCCEEDED,
-                WebhookEventTypes.CHARGE_FAILED, WebhookEventTypes.CHARGE_RETRYING));
+            WebhookEventTypes.RECURRING);
     }
 
     @Test
