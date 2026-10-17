@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0
+
+### Breaking
+
+- The base URL is required. The client no longer falls back to production when you leave it
+  out, so an unset environment variable cannot send sandbox credentials to production.
+  `build()` throws `ValidationException` when the base URL is missing, null, empty or
+  whitespace. Pass `DominaiteClient.SANDBOX_BASE_URL` (`https://api.staging.dominaite.com/payments`)
+  or `DominaiteClient.PRODUCTION_BASE_URL` (`https://api.dominaite.com/payments`), or your own value.
+- `DominaiteClient.DEFAULT_BASE_URL` is removed. Use `DominaiteClient.PRODUCTION_BASE_URL`.
+- The base URL must be `https://`. `http://` is accepted only for localhost, 127.0.0.1 and ::1,
+  the same rule as the other SDKs. `build()` throws `ValidationException` for anything else.
+
 ## 0.5.2
 
 The first release of the Java SDK. It has the same API surface as version 0.5.2 of the Node,

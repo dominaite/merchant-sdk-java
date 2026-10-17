@@ -6,7 +6,7 @@
 
   <groupId>com.dominaite</groupId>
   <artifactId>merchant-sdk</artifactId>
-  <version>0.5.2</version>
+  <version>0.6.0</version>
   <packaging>jar</packaging>
 
   <name>Dominaite merchant SDK</name>
