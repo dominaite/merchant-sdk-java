@@ -7,7 +7,7 @@ import java.time.Instant;
 /**
  * The answer of {@link DominaiteClient#ping}: the credentials work, and the clocks agree.
  */
-public final class PingResponse {
+public final class PingResponse extends ApiResult {
 
     private boolean pong;
     private String merchantId;

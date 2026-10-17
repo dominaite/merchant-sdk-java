@@ -632,17 +632,19 @@ public final class DominaiteClient {
 
         int status = response.statusCode();
         // Every response, success or error, can carry the request id and the SDK notice.
-        diagnostics.request(method, path, status, System.nanoTime() - started,
-            response.headers().firstValue(Diagnostics.REQUEST_ID_HEADER).orElse(null), idempotencyKey);
+        String headerRequestId = response.headers().firstValue(Diagnostics.REQUEST_ID_HEADER).orElse(null);
+        diagnostics.request(method, path, status, System.nanoTime() - started, headerRequestId, idempotencyKey);
         diagnostics.notice(response.headers().firstValue(Diagnostics.NOTICE_HEADER).orElse(null));
         // The API never redirects. A 3xx is a hard error, never retried.
         if (status >= 300 && status < 400) {
-            throw new ApiException(status, null,
+            ApiException redirect = new ApiException(status, null,
                 "The Dominaite API returned an unexpected redirect response; the Dominaite API never redirects.", null);
+            redirect.setRequestId(Reply.headerValue(headerRequestId));
+            throw redirect;
         }
         // A revoke answers 204 with no body, and no body is not a parse failure.
         if (status == 204) {
-            return new Reply(status, Json.MAPPER.createObjectNode(), null);
+            return new Reply(status, Json.MAPPER.createObjectNode(), null, headerRequestId);
         }
 
         String raw = response.body() == null ? "" : response.body();
@@ -650,20 +652,22 @@ public final class DominaiteClient {
         if (status == 429) {
             Duration retryAfter = readRetryAfter(response.headers().firstValue("Retry-After").orElse(null));
             JsonNode envelope = tryParseObject(raw);
-            Reply reply = new Reply(status, envelope != null ? envelope : Json.MAPPER.createObjectNode(), retryAfter);
+            Reply reply = new Reply(status, envelope != null ? envelope : Json.MAPPER.createObjectNode(), retryAfter,
+                headerRequestId);
             throw reply.tag(reply.rejection());
         }
 
         JsonNode envelope = tryParseObject(raw);
         if (envelope == null) {
-            if (status >= 500) {
-                throw new TransportException("The Dominaite API is unavailable (HTTP " + status
-                    + "); retry with the same idempotency key.", status, null, null);
-            }
-            throw new ApiException(status, null, "The Dominaite API returned a non-JSON response.", null);
+            DominaiteException unreadable = status >= 500
+                ? new TransportException("The Dominaite API is unavailable (HTTP " + status
+                    + "); retry with the same idempotency key.", status, null, null)
+                : new ApiException(status, null, "The Dominaite API returned a non-JSON response.", null);
+            unreadable.setRequestId(Reply.headerValue(headerRequestId));
+            throw unreadable;
         }
 
-        Reply reply = new Reply(status, envelope, null);
+        Reply reply = new Reply(status, envelope, null, headerRequestId);
         // Credentials and permissions are refused the same way on every route.
         if (status == 401 || status == 403) {
             throw reply.tag(reply.rejection());
@@ -803,11 +807,22 @@ public final class DominaiteClient {
         final int status;
         final JsonNode envelope;
         final Duration retryAfter;
+        private final String requestId;
 
-        Reply(int status, JsonNode envelope, Duration retryAfter) {
+        Reply(int status, JsonNode envelope, Duration retryAfter, String headerRequestId) {
             this.status = status;
             this.envelope = envelope;
             this.retryAfter = retryAfter;
+            // Production sends the request id only in the body. The header wins when both are there.
+            String header = headerValue(headerRequestId);
+            this.requestId = header != null ? header : Json.text(envelope.get("metadata"), "requestId");
+        }
+
+        static String headerValue(String header) {
+            if (header == null || header.trim().isEmpty()) {
+                return null;
+            }
+            return header.trim();
         }
 
         boolean success() {
@@ -836,12 +851,8 @@ public final class DominaiteClient {
             return message != null ? message : Json.text(payload(), "errorMessage");
         }
 
-        String requestId() {
-            return Json.text(envelope.get("metadata"), "requestId");
-        }
-
         <E extends DominaiteException> E tag(E error) {
-            error.setRequestId(requestId());
+            error.setRequestId(requestId);
             return error;
         }
 
@@ -884,6 +895,9 @@ public final class DominaiteClient {
                 throw tag(new ApiException(status, null, "The Dominaite API returned an unexpected " + what + " response.", envelope));
             }
             setRaw(value, node);
+            if (value instanceof ApiResult) {
+                ((ApiResult) value).setRequestId(requestId);
+            }
             return value;
         }
 
@@ -937,6 +951,7 @@ public final class DominaiteClient {
             RefundList list = read(data, RefundList.class, "refund list");
             for (int i = 0; i < list.getRefunds().size(); i++) {
                 list.getRefunds().get(i).setRaw(refunds.get(i));
+                list.getRefunds().get(i).setRequestId(requestId);
             }
             return list;
         }

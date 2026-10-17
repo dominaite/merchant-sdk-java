@@ -7,7 +7,7 @@ import java.util.List;
 /**
  * The refunds of one payment.
  */
-public final class RefundList {
+public final class RefundList extends ApiResult {
 
     private String transactionId;
     private String currency;

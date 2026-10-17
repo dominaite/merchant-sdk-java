@@ -8,7 +8,7 @@ import java.util.List;
 /**
  * A webhook endpoint. {@link #getSecret()} is set only in the create answer: store it then.
  */
-public final class WebhookEndpoint {
+public final class WebhookEndpoint extends ApiResult {
 
     private String id;
     private String url;

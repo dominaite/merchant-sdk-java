@@ -38,8 +38,9 @@ public class DominaiteException extends RuntimeException {
     }
 
     /**
-     * The request id from the response envelope ({@code metadata.requestId}), or null when the
-     * response had none. Give it to Dominaite support when you ask about one call.
+     * The request id of the response: the {@code Dominaite-Request-Id} header when the response
+     * has one, else {@code metadata.requestId} in the body, else null (also when no response
+     * arrived). Give it to Dominaite support when you ask about one call.
      */
     public String getRequestId() {
         return requestId;

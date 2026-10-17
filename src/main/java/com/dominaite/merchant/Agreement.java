@@ -7,7 +7,7 @@ import java.time.Instant;
 /**
  * One payer's subscription to a plan.
  */
-public final class Agreement {
+public final class Agreement extends ApiResult {
 
     private String id;
     private String planId;

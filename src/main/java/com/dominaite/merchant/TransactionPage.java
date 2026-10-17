@@ -7,7 +7,7 @@ import java.util.List;
 /**
  * One page of {@link DominaiteClient#listTransactions}.
  */
-public final class TransactionPage {
+public final class TransactionPage extends ApiResult {
 
     private List<TransactionItem> items;
     private String nextCursor;

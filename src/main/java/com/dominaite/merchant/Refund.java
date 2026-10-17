@@ -7,7 +7,7 @@ import java.time.Instant;
 /**
  * A refund of a payment.
  */
-public final class Refund {
+public final class Refund extends ApiResult {
 
     private String refundId;
     private String transactionId;
