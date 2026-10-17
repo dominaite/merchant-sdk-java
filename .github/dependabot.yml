@@ -17,3 +17,7 @@ updates:
     groups:
       maven:
         patterns: ["*"]
+    ignore:
+      # JUnit 6 needs Java 17. The SDK supports Java 11.
+      - dependency-name: org.junit.jupiter:*
+        versions: [">= 6"]
