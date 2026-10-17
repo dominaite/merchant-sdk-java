@@ -78,11 +78,12 @@ key section, ask Dominaite support for the key. Every key can call `ping()` and
 
 | Environment | Base URL |
 |---|---|
-| Production | `https://api.dominaite.com/payments` (the default) |
-| Dev / staging | the base URL of that environment |
+| Sandbox | `https://api.staging.dominaite.com/payments` (`DominaiteClient.SANDBOX_BASE_URL`) |
+| Production | `https://api.dominaite.com/payments` (`DominaiteClient.PRODUCTION_BASE_URL`) |
 
-Confirm the host for your environment before the first call. Keys are issued per environment, so
-**a dev key against production always fails with `INVALID_API_KEY`**.
+The base URL is required: there is no default. A missing, empty or whitespace-only `baseUrl`
+throws `ValidationException` when you build the client. Keys are issued per environment, so
+**a sandbox key against production always fails with `INVALID_API_KEY`**.
 
 The prefix of the base URL is never part of the signed path. On production you POST to
 `https://api.dominaite.com/payments/merchant-api/checkout/sessions`, but you sign
@@ -93,9 +94,8 @@ The prefix of the base URL is never part of the signed path. On production you P
 ```sh
 export DOMINAITE_KEY_ID=dmk_...      # Website integration tab
 export DOMINAITE_SECRET=dms_...      # shown once when you generated the key
-# Production needs no DOMINAITE_BASE_URL.
-# For a test environment, set it to the base URL of that environment:
-# export DOMINAITE_BASE_URL=https://...
+# Required. The sandbox, or https://api.dominaite.com/payments for production:
+export DOMINAITE_BASE_URL=https://api.staging.dominaite.com/payments
 ```
 
 ```java
@@ -104,7 +104,7 @@ import com.dominaite.merchant.*;
 DominaiteClient client = DominaiteClient.builder()
     .keyId(System.getenv("DOMINAITE_KEY_ID"))
     .secret(System.getenv("DOMINAITE_SECRET"))
-    // An unset variable is null, and null keeps the production default.
+    // Required. An unset variable is null, and build() throws on it.
     .baseUrl(System.getenv("DOMINAITE_BASE_URL"))
     .build();
 
@@ -203,12 +203,12 @@ signing. A 503 means retry later.
 
 ## Client options
 
-`DominaiteClient.builder().keyId(...).secret(...).build()` gives you production with a 45 second
-timeout. The builder takes more:
+`DominaiteClient.builder().keyId(...).secret(...).baseUrl(...).build()` gives you a client on that
+base URL with a 45 second timeout. The builder takes:
 
 | Option | What |
 |---|---|
-| `baseUrl` | Point the client at a non-production environment. The builder ignores null, empty and whitespace-only values, so an unset environment variable gives you production. |
+| `baseUrl` | Required. `DominaiteClient.SANDBOX_BASE_URL` or `DominaiteClient.PRODUCTION_BASE_URL`, or your own value. Null, empty or whitespace throws `ValidationException`. Must be `https://`; `http://` only for localhost, 127.0.0.1 and ::1. |
 | `timeout` | The timeout for each request. The default is 45 seconds, because serverless cold starts can take 10 seconds or more. |
 | `userAgentSuffix` | Adds your identifier to the User-Agent of the SDK. This helps when support reads the access logs. |
 | `httpClient` | Your own `java.net.http.HttpClient`, for a proxy or your own executor. Build it with `followRedirects(HttpClient.Redirect.NEVER)`. The SDK still sets `timeout` on each request. |

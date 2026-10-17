@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -32,8 +33,11 @@ import java.util.regex.Pattern;
  */
 public final class DominaiteClient {
 
-    /** Production. The default when no base URL is set. */
-    public static final String DEFAULT_BASE_URL = "https://api.dominaite.com/payments";
+    /** The sandbox merchant API. Use it with your sandbox keys. */
+    public static final String SANDBOX_BASE_URL = "https://api.staging.dominaite.com/payments";
+
+    /** The production merchant API. Use it with your live keys. */
+    public static final String PRODUCTION_BASE_URL = "https://api.dominaite.com/payments";
 
     /** The default per-request timeout. Cold starts outside production can take 10+ seconds. */
     public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(45);
@@ -78,7 +82,14 @@ public final class DominaiteClient {
         while (base.endsWith("/")) {
             base = base.substring(0, base.length() - 1);
         }
-        this.baseUrl = base.isEmpty() ? DEFAULT_BASE_URL : base;
+        // There is no default base URL. A fallback to production would turn an unset environment
+        // variable into sandbox keys sent to production.
+        if (base.isEmpty()) {
+            throw new ValidationException("baseUrl is required. Use " + SANDBOX_BASE_URL
+                + " for the sandbox or " + PRODUCTION_BASE_URL + " for production.");
+        }
+        requireEncryptedTransport(base);
+        this.baseUrl = base;
 
         if (b.timeout == null || b.timeout.isZero() || b.timeout.isNegative()) {
             throw new ValidationException("timeout must be positive");
@@ -519,6 +530,33 @@ public final class DominaiteClient {
 
     // ---------------------------------------------------------------- transport
 
+    /**
+     * Refuses a base URL that would put the signed request on the wire in clear text. Plain
+     * {@code http://} is allowed only for localhost, 127.0.0.1 and ::1, for local mock servers.
+     */
+    private static void requireEncryptedTransport(String baseUrl) {
+        URI uri;
+        try {
+            uri = new URI(baseUrl);
+        } catch (URISyntaxException e) {
+            throw new ValidationException("baseUrl is not a valid URL: " + baseUrl);
+        }
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+        if (scheme.equals("https")) {
+            return;
+        }
+        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+        if (host.startsWith("[") && host.endsWith("]")) {
+            host = host.substring(1, host.length() - 1);
+        }
+        if (scheme.equals("http") && (host.equals("localhost") || host.equals("127.0.0.1") || host.equals("::1"))) {
+            return;
+        }
+        throw new ValidationException("baseUrl must use https:// (http:// is allowed only for localhost, "
+            + "127.0.0.1 and ::1). Anywhere else it would send your key id, signature and request body "
+            + "in clear text.");
+    }
+
     private Reply send(String method, String path, String query, String body, String idempotencyKey) {
         String timestamp = Long.toString(Instant.now().getEpochSecond());
         // The signed path is the canonical path only: never the base URL's own prefix, never
@@ -942,7 +980,7 @@ public final class DominaiteClient {
 
     // ---------------------------------------------------------------- builder
 
-    /** Builds a {@link DominaiteClient}. keyId and secret are required. */
+    /** Builds a {@link DominaiteClient}. keyId, secret and baseUrl are required. */
     public static final class Builder {
 
         private String keyId;
@@ -968,8 +1006,11 @@ public final class DominaiteClient {
         }
 
         /**
-         * The API to call. Null, empty and blank values give production. Trailing slashes are
-         * trimmed. The base URL's own prefix is never part of the signed path.
+         * The API to call: {@link #SANDBOX_BASE_URL}, {@link #PRODUCTION_BASE_URL} or your own
+         * value. Required: {@link Builder#build()} throws {@link ValidationException} when it is
+         * null, empty or blank. It must be {@code https://}; {@code http://} is accepted only for
+         * localhost, 127.0.0.1 and ::1. Trailing slashes are trimmed. The base URL's own prefix
+         * is never part of the signed path.
          */
         public Builder baseUrl(String baseUrl) {
             this.baseUrl = baseUrl;

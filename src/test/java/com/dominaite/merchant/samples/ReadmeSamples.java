@@ -22,7 +22,7 @@ final class ReadmeSamples {
         DominaiteClient client = DominaiteClient.builder()
             .keyId(System.getenv("DOMINAITE_KEY_ID"))
             .secret(System.getenv("DOMINAITE_SECRET"))
-            // An unset variable is null, and null keeps the production default.
+            // Required. An unset variable is null, and build() throws on it.
             .baseUrl(System.getenv("DOMINAITE_BASE_URL"))
             .build();
 
