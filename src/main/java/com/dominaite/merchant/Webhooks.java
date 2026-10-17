@@ -151,23 +151,37 @@ public final class Webhooks {
         AgreementEventData agreement = null;
         ChargeEventData charge = null;
         if (data != null && data.isObject()) {
-            try {
-                // A verify-only session's events carry the payment data shape too.
-                if (type.startsWith("payment.") || type.startsWith("verification.")) {
-                    payment = Json.MAPPER.treeToValue(data, PaymentEventData.class);
+            // A verify-only session's events carry the payment data shape too.
+            if (type.startsWith("payment.") || type.startsWith("verification.")) {
+                payment = typedOrNull(data, PaymentEventData.class);
+                if (payment != null) {
                     payment.setRaw(data);
-                } else if (type.startsWith("agreement.")) {
-                    agreement = Json.MAPPER.treeToValue(data, AgreementEventData.class);
+                }
+            } else if (type.startsWith("agreement.")) {
+                agreement = typedOrNull(data, AgreementEventData.class);
+                if (agreement != null) {
                     agreement.setRaw(data);
-                } else if (type.startsWith("charge.")) {
-                    charge = Json.MAPPER.treeToValue(data, ChargeEventData.class);
+                }
+            } else if (type.startsWith("charge.")) {
+                charge = typedOrNull(data, ChargeEventData.class);
+                if (charge != null) {
                     charge.setRaw(data);
                 }
-            } catch (JsonProcessingException e) {
-                throw malformedPayload("the data is not readable (" + originalMessage(e) + ")");
             }
         }
         return new WebhookEvent(id, type, apiVersion, createdAt, data, payment, agreement, charge, root);
+    }
+
+    /**
+     * Reads the typed data, or null when it does not map to the model. The event is authentic,
+     * so an unexpected shape must not fail it; the caller still has the data as JSON.
+     */
+    private static <T> T typedOrNull(JsonNode data, Class<T> model) {
+        try {
+            return Json.MAPPER.treeToValue(data, model);
+        } catch (JsonProcessingException | IllegalArgumentException e) {
+            return null;
+        }
     }
 
     private static String requiredString(JsonNode root, String name) {

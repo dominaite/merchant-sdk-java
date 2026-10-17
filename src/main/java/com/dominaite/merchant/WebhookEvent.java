@@ -7,7 +7,9 @@ import java.time.Instant;
  * A verified webhook event. The typed data is set by the event type's prefix: {@code payment.}
  * and {@code verification.} fill {@link #getPayment()}, {@code agreement.} fills
  * {@link #getAgreement()}, {@code charge.} fills {@link #getCharge()}. An event type the SDK has
- * never seen leaves all three null; its data is still in {@link #getData()}.
+ * never seen leaves all three null; its data is still in {@link #getData()}. Data that does not
+ * map to the typed model, for example a number sent as text, also leaves the typed getter null
+ * and the event still verifies. Check for null before you read the typed data.
  */
 public final class WebhookEvent {
 

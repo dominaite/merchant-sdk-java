@@ -42,6 +42,11 @@
 
 ### Fixed
 
+- A signed webhook event whose data does not map to the typed model, for example
+  `"periodNumber":"two"` or `"amount":"ten"`, verifies again. `getPayment()`, `getAgreement()` or
+  `getCharge()` is null and `getData()` keeps the data as sent. Before, `verifyAndParse` threw
+  `MALFORMED_PAYLOAD`. These getters can now be null for a known event type, so check for null
+  before you read them. A body that is not JSON, or has no `type`, still throws.
 - A `pm_` payment method id typed in upper case is lowercased before signing. The gateway signs
   the lowercase id, so the call failed with `INVALID_SIGNATURE`.
 - Instants in queries and bodies are cut to microseconds. An `Instant` with nanoseconds printed 9

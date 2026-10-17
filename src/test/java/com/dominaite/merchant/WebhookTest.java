@@ -220,12 +220,45 @@ class WebhookTest {
         assertEquals(card, data.getRaw().get("paymentMethod").toString());
     }
 
+    static Stream<Arguments> wrongTypedScalars() {
+        return Stream.of(
+            Arguments.of("payment.succeeded", "amount", "{\"transactionId\":\"t\",\"amount\":\"ten\",\"currency\":\"EUR\"}"),
+            Arguments.of("verification.failed", "verifyOnly",
+                "{\"transactionId\":\"t\",\"status\":\"failed\",\"verifyOnly\":\"yes\"}"),
+            Arguments.of("agreement.activated", "intervalCount",
+                "{\"id\":\"agr_1\",\"amount\":999,\"currency\":\"EUR\",\"intervalCount\":\"two\"}"),
+            Arguments.of("charge.retrying", "periodNumber",
+                "{\"chargeId\":\"ch_1\",\"agreementId\":\"agr_1\",\"periodNumber\":\"two\",\"amount\":999}"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("wrongTypedScalars")
+    void aSignedEventWhoseDataDoesNotMapStillVerifiesWithTheRawData(String type, String field, String data) {
+        String body = "{\"id\":\"e6\",\"type\":\"" + type + "\",\"data\":" + data + "}";
+        WebhookEvent event = assertDoesNotThrow(
+            () -> Webhooks.verifyAndParse(body, "t=" + TS + ",v1=" + sign(TS, body), SECRET, TOL, TIMESTAMP));
+
+        assertEquals("e6", event.getId());
+        assertEquals(type, event.getType());
+        assertNull(event.getPayment());
+        assertNull(event.getAgreement());
+        assertNull(event.getCharge());
+        assertEquals(data, event.getData().toString());
+        assertEquals(event.getData(), event.getRaw().get("data"));
+        assertTrue(event.getData().get(field).isTextual(), field + " is kept as sent");
+    }
+
     @Test
     void aBodyThatIsNotAnEnvelopeIsMalformedPayload() {
         String body = "[1,2]";
         WebhookVerificationException error = assertThrows(WebhookVerificationException.class,
             () -> Webhooks.verifyAndParse(body, "t=" + TS + ",v1=" + sign(TS, body), SECRET, TOL, TIMESTAMP));
         assertEquals(WebhookFailureReason.MALFORMED_PAYLOAD, error.getReason());
+
+        String truncated = "{\"id\":\"e1\",\"type\":\"payment.succeeded\",\"data\":{\"amount\":1}";
+        WebhookVerificationException notJson = assertThrows(WebhookVerificationException.class,
+            () -> Webhooks.verifyAndParse(truncated, "t=" + TS + ",v1=" + sign(TS, truncated), SECRET, TOL, TIMESTAMP));
+        assertEquals(WebhookFailureReason.MALFORMED_PAYLOAD, notJson.getReason());
 
         String noType = "{\"id\":\"e1\"}";
         WebhookVerificationException missing = assertThrows(WebhookVerificationException.class,
