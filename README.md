@@ -858,3 +858,16 @@ sessions. `getRaw()` has the whole contract.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Versioning and support
+
+The SDK is 0.x. A minor release (for example 0.6 to 0.7) can contain a breaking change.
+[CHANGELOG.md](CHANGELOG.md) lists every breaking change under "Breaking", with what to change in
+your code. Pin an exact version and read the CHANGELOG before you upgrade.
+
+The SDK supports Java 11 and later. CI tests it on JDK 11, 17 and 21.
+
+The API can tell you that your SDK version is old. It sends the `Dominaite-Sdk-Notice` response
+header, and the SDK passes it on as a warning once for each distinct notice (see
+[Logging and warnings](#logging-and-warnings)). Send the warnings to your logs, and upgrade when
+you see one. The header is optional: a response without it gives no notice.
