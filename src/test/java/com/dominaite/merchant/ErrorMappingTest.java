@@ -366,6 +366,10 @@ class ErrorMappingTest {
                 () -> client.createCheckoutSession(ClientWireTest.session().amount(100).verifyOnly(true).build()));
             assertThrows(ValidationException.class,
                 () -> client.createCheckoutSession(ClientWireTest.session().orderReference(" ").build()));
+            assertThrows(ValidationException.class,
+                () -> client.createCheckoutSession(ClientWireTest.session().currency("eur").build()));
+            assertThrows(ValidationException.class, () -> client.chargePaymentMethod(PM, ChargeRequest.builder()
+                .amount(100).currency("EURO").orderReference("o").idempotencyKey("k").build()));
             assertThrows(ValidationException.class, () -> client.getStatus("not-a-uuid"));
             assertThrows(ValidationException.class, () -> client.chargePaymentMethod("pm/1", charge()));
             assertThrows(ValidationException.class, () -> client.deleteWebhookEndpoint("hook_1"));

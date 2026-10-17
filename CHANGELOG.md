@@ -36,6 +36,9 @@
   `WEBHOOK`. A test pins them to the vendored wire contract.
 - `WebhookEventTypes.RECURRING`: the subscription events, in the contract's order.
 
+- `createCheckoutSession` and `chargePaymentMethod` throw `ValidationException` and send nothing
+  when the currency is not 3 upper case letters. The gateway refused it with a 400.
+
 ### Fixed
 
 - A `pm_` payment method id typed in upper case is lowercased before signing. The gateway signs

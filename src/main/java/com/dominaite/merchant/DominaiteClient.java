@@ -70,6 +70,7 @@ public final class DominaiteClient {
     private static final String KEY_ID_PREFIX = "dmk_";
     private static final String SECRET_PREFIX = "dms_";
     private static final Pattern ID_SEGMENT = Pattern.compile("^[A-Za-z0-9_-]{1,100}$");
+    private static final Pattern CURRENCY = Pattern.compile("^[A-Z]{3}$");
     private static final Pattern PAYMENT_METHOD_ID = Pattern.compile("^(?i)pm_[0-9a-f]{32}$");
     private static final Pattern UUID_TEXT = Pattern.compile(
         "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
@@ -764,6 +765,9 @@ public final class DominaiteClient {
         }
         if (currency == null || currency.trim().isEmpty()) {
             throw new ValidationException("Missing required parameter: currency");
+        }
+        if (!CURRENCY.matcher(currency).matches()) {
+            throw new ValidationException("currency must be a 3-letter upper case ISO 4217 code, e.g. EUR");
         }
         if (orderReference == null || orderReference.trim().isEmpty()) {
             throw new ValidationException("Missing required parameter: orderReference");
