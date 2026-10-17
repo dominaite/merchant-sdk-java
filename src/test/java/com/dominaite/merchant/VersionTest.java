@@ -24,7 +24,8 @@ class VersionTest {
     @Test
     void theChangelogStartsWithThisVersion() throws Exception {
         String changelog = new String(Files.readAllBytes(Paths.get("CHANGELOG.md")), StandardCharsets.UTF_8);
-        Matcher m = Pattern.compile("(?m)^## (\\S+)").matcher(changelog);
+        // An "(unreleased)" section may sit above the released version.
+        Matcher m = Pattern.compile("(?m)^## (\\S+)(?! \\(unreleased\\))$").matcher(changelog);
         assertTrue(m.find(), "no version heading in CHANGELOG.md");
         assertEquals(DominaiteClient.VERSION, m.group(1));
     }

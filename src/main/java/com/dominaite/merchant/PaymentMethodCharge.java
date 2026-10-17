@@ -7,7 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
  * The result of {@link DominaiteClient#chargePaymentMethod}. A decline is a result too: the status
  * is {@code failed}, and {@link #getDeclineClass()} says what kind, or is null.
  */
-public final class PaymentMethodCharge {
+public final class PaymentMethodCharge extends ApiResult {
 
     private String chargeId;
     private String status;

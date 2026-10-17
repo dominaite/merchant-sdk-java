@@ -8,7 +8,7 @@ import java.util.List;
  * The public contract of the API: version, status and event values, and the recurring
  * vocabularies. {@link #getRaw()} has the whole contract.
  */
-public final class IntegrationContract {
+public final class IntegrationContract extends ApiResult {
 
     private String version;
     private String apiBase;

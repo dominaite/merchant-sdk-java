@@ -57,10 +57,15 @@ final class ReadmeSamples {
     static void retries(DominaiteClient client, CheckoutSessionRequest request, String orderId, long amountMinor) {
         String key = IdempotencyKeys.forOrder("checkout", orderId, amountMinor, "EUR");
 
-        CheckoutSession retried = client.createCheckoutSessionWithRetry(request, 3, Duration.ofMillis(500));
+        DominaiteClient retrying = DominaiteClient.builder()
+            .keyId(System.getenv("DOMINAITE_KEY_ID"))
+            .secret(System.getenv("DOMINAITE_SECRET"))
+            .baseUrl(System.getenv("DOMINAITE_BASE_URL"))
+            .maxRetries(3)   // the default is 2; 0 turns retries off
+            .build();
 
         try {
-            CheckoutSession session = client.createCheckoutSessionWithRetry(request);
+            CheckoutSession session = client.createCheckoutSession(request);
         } catch (RefusalException error) {
             if (error.getTransactionId() != null) {
                 CheckoutStatus status = client.getStatus(error.getTransactionId());

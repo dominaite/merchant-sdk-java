@@ -95,7 +95,7 @@ class DiagnosticsTest {
     @Test
     void aTransportFailureIsADebugLineWithError() {
         DominaiteClient client = DominaiteClient.builder().keyId(MockServer.KEY_ID).secret(MockServer.SECRET)
-            .baseUrl("http://127.0.0.1:1").timeout(Duration.ofSeconds(2)).onDebug(debug::add).build();
+            .baseUrl("http://127.0.0.1:1").timeout(Duration.ofSeconds(2)).maxRetries(0).onDebug(debug::add).build();
         assertThrows(TransportException.class, client::ping);
         assertEquals(1, debug.size());
         assertTrue(debug.get(0).matches("^dominaite-java: GET /merchant-api/ping error \\d+ms$"), debug.get(0));

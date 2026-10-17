@@ -168,12 +168,56 @@ class WebhookTest {
             + "\"periodNumber\":2,\"outcome\":\"retrying\",\"amount\":999,\"currency\":\"EUR\",\"declineClass\":\"soft_funds\"}}";
         WebhookEvent c = Webhooks.verifyAndParse(charge, "t=" + TS + ",v1=" + sign(TS, charge), SECRET, TOL, TIMESTAMP);
         assertEquals("agr_1/2", c.getCharge().getOrderingKey());
+        assertNull(c.getCharge().getPaymentMethod());
 
         String verification = "{\"id\":\"e3\",\"type\":\"verification.failed\",\"data\":{\"transactionId\":\"t\","
             + "\"status\":\"failed\",\"verifyOnly\":true,\"declineClass\":null}}";
         WebhookEvent v = Webhooks.verifyAndParse(verification, "t=" + TS + ",v1=" + sign(TS, verification), SECRET, TOL, TIMESTAMP);
         assertTrue(v.getPayment().isVerifyOnly());
         assertNull(v.getPayment().getDeclineClass());
+    }
+
+    @Test
+    void aChargeEventCarriesTheCardAndToleratesExplicitNulls() {
+        String charge = "{\"id\":\"e4\",\"type\":\"charge.failed\",\"createdAt\":\"2026-10-17T10:00:00Z\","
+            + "\"data\":{\"chargeId\":\"ch_1\",\"transactionId\":null,\"storedPaymentMethodId\":\"pm_1\","
+            + "\"agreementId\":\"agr_1\",\"customerReference\":\"cust-1\",\"outcome\":\"failed\",\"periodNumber\":1,"
+            + "\"attemptNumber\":3,\"amount\":999,\"currency\":\"EUR\",\"paymentMethod\":{\"brand\":\"visa\","
+            + "\"last4\":\"4242\"},\"orderReference\":null,\"description\":null,\"declineClass\":\"hard\","
+            + "\"declineCode\":\"05\",\"nextAttemptAt\":null,\"nextChargeAt\":null,\"sequence\":7}}";
+        ChargeEventData data = Webhooks.verifyAndParse(charge, "t=" + TS + ",v1=" + sign(TS, charge), SECRET, TOL, TIMESTAMP)
+            .getCharge();
+        assertEquals("visa", data.getPaymentMethod().getBrand());
+        assertEquals("4242", data.getPaymentMethod().getLast4());
+        assertEquals(Integer.valueOf(3), data.getAttemptNumber());
+        assertNull(data.getTransactionId());
+        assertNull(data.getNextAttemptAt());
+
+        String nullCard = charge.replace("{\"brand\":\"visa\",\"last4\":\"4242\"}", "null");
+        assertNull(Webhooks.verifyAndParse(nullCard, "t=" + TS + ",v1=" + sign(TS, nullCard), SECRET, TOL, TIMESTAMP)
+            .getCharge().getPaymentMethod());
+    }
+
+    static Stream<Arguments> wrongShapedCards() {
+        return Stream.of(
+            Arguments.of("\"visa\""),
+            Arguments.of("\"\""),
+            Arguments.of("[\"visa\",\"4242\"]"),
+            Arguments.of("{\"brand\":{\"name\":\"visa\"},\"last4\":\"4242\"}"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("wrongShapedCards")
+    void aSignedChargeEventWithAWrongShapedCardStillVerifies(String card) {
+        String charge = "{\"id\":\"e5\",\"type\":\"charge.succeeded\",\"data\":{\"chargeId\":\"ch_1\","
+            + "\"amount\":999,\"currency\":\"EUR\",\"paymentMethod\":" + card + "}}";
+        WebhookEvent event = assertDoesNotThrow(
+            () -> Webhooks.verifyAndParse(charge, "t=" + TS + ",v1=" + sign(TS, charge), SECRET, TOL, TIMESTAMP));
+        ChargeEventData data = event.getCharge();
+        assertNull(data.getPaymentMethod());
+        assertEquals("ch_1", data.getChargeId());
+        assertEquals(999, data.getAmount());
+        assertEquals(card, data.getRaw().get("paymentMethod").toString());
     }
 
     @Test

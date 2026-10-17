@@ -8,7 +8,7 @@ import java.time.Instant;
  * A checkout session: hand {@link #getCashierKey()} and {@link #getCashierToken()} to the widget
  * on your page. Store {@link #getTransactionId()}.
  */
-public final class CheckoutSession {
+public final class CheckoutSession extends ApiResult {
 
     private String transactionId;
     private String orderId;

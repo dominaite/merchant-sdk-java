@@ -211,7 +211,8 @@ base URL with a 45 second timeout. The builder takes:
 | Option | What |
 |---|---|
 | `baseUrl` | Required. `DominaiteClient.SANDBOX_BASE_URL` or `DominaiteClient.PRODUCTION_BASE_URL`, or your own value. Null, empty or whitespace throws `ValidationException`. Must be `https://`; `http://` only for localhost, 127.0.0.1 and ::1. |
-| `timeout` | The timeout for each request. The default is 45 seconds, because serverless cold starts can take 10 seconds or more. |
+| `timeout` | The timeout for each attempt. The default is 45 seconds, because serverless cold starts can take 10 seconds or more. With retries, one call can wait up to `(maxRetries + 1) x timeout`, plus the waits between attempts. |
+| `maxRetries` | How many times the client retries a failed call after the first attempt. The default is 2; 0 sends every call once. A negative value throws `ValidationException`. See [Retries and double charges](#retries-and-double-charges). |
 | `userAgentSuffix` | Adds your identifier to the User-Agent, after one space. This helps when support reads the access logs. A control character throws `ValidationException`. |
 | `onWarning` | A `Consumer<String>` for the SDK's warnings. See [Logging and warnings](#logging-and-warnings). |
 | `onDebug` | A `Consumer<String>` that switches the debug log on. Off by default. See [Logging and warnings](#logging-and-warnings). |
@@ -236,7 +237,7 @@ The SDK writes nothing by itself except warnings. Warnings go to `onWarning`, or
 - the API marks your SDK version as deprecated with the `Dominaite-Sdk-Notice` response header.
   The SDK reads it on every response and warns once for each distinct notice, for example
   `dominaite-java 0.6.0 is deprecated; upgrade to 0.7.0 (sunset 2027-01-31). https://...`;
-- `createCheckoutSessionWithRetry` retries after a failure;
+- the client retries a call after a failure;
 - `ping()` reports a clock skew over 60 seconds.
 
 `onDebug` switches on the debug log, one line per HTTP request: the method, the path, the status,
@@ -303,17 +304,42 @@ The gateway wants this: it refuses a reused key with a different amount as
 build yourself: 1 to 100 characters, visible ASCII only (`!` to `~`, so no spaces and no non-ASCII
 order ids).
 
-`createCheckoutSessionWithRetry` sends the key of the request on every attempt. It retries
-transport failures (network errors, timeouts, and a 5xx, including `MERCHANT_API_UNAVAILABLE`) and
-`PAYMENT_PROCESSING_UNAVAILABLE`. That code means that card payments are off for a moment and
-nothing was created. It throws every other refusal at once, and also storefront, authentication and
-permission failures, because a retry does not change them. It throws a rate limit (HTTP 429) at
-once too: wait `getRetryAfter()`, then call again with the same key. `isRetryable()` on any
-`DominaiteException` gives you the same answer for your own retry loop.
+The client retries by itself. One policy covers every GET call and every POST call that carries an
+idempotency key: `createCheckoutSession`, `chargePaymentMethod`, `createRefund`, `createPlan` and
+`createAgreement`.
+
+- It retries transport failures: a network error, a timeout, and a 5xx without a code of the route,
+  such as `MERCHANT_API_UNAVAILABLE` or `INTERNAL_ERROR`. It also retries
+  `PAYMENT_PROCESSING_UNAVAILABLE`, which means that card payments are off for a moment and nothing
+  was created.
+- It retries at most `maxRetries` times (default 2, so 3 attempts). `maxRetries(0)` sends every
+  call once.
+- The wait before retry `n` (from 0) is random between 0 and `500 ms x 2^n`, and at most 8 seconds.
+- Every attempt sends the same path, idempotency key and body bytes, with a fresh timestamp and
+  signature. A retry never opens a second payment.
+- The timeout is per attempt. One call can wait up to `(maxRetries + 1) x timeout`, plus the waits.
+- It never retries a rate limit (HTTP 429). It throws `RateLimitedException` at once: wait
+  `getRetryAfter()`, then call again with the same key.
+- It never retries a refusal with a code of the route, such as `CHARGE_OUTCOME_UNKNOWN`, nor a
+  storefront, authentication or permission failure, because a retry does not change them.
+- It never retries `createWebhookEndpoint`, `updatePlan` or a DELETE call. A replay of a webhook
+  endpoint create answers without the signing secret, so an automatic retry could lose it.
+
+When the retries run out, the client throws the last error. `isRetryable()` on any
+`DominaiteException` tells you whether a later call with the same key can still succeed, for your
+own retry loop. The client logs each retry as a warning.
 
 ```java
-CheckoutSession session = client.createCheckoutSessionWithRetry(request, 3, Duration.ofMillis(500));
+DominaiteClient client = DominaiteClient.builder()
+    .keyId(System.getenv("DOMINAITE_KEY_ID"))
+    .secret(System.getenv("DOMINAITE_SECRET"))
+    .baseUrl(System.getenv("DOMINAITE_BASE_URL"))
+    .maxRetries(3)   // the default is 2; 0 turns retries off
+    .build();
 ```
+
+`createCheckoutSessionWithRetry` is deprecated. It still works, with its own attempt count in
+place of the client's, so the two never add up.
 
 The reused key makes the retry safe: a retried key never opens a second payment. A clean replay of
 a session that is still open returns the ORIGINAL session, with the same transaction id and cashier
@@ -325,7 +351,7 @@ transaction id to read with `getStatus`:
 
 ```java
 try {
-    CheckoutSession session = client.createCheckoutSessionWithRetry(request);
+    CheckoutSession session = client.createCheckoutSession(request);
 } catch (RefusalException error) {
     if (error.getTransactionId() != null) {
         CheckoutStatus status = client.getStatus(error.getTransactionId());
@@ -664,8 +690,9 @@ WebhookEndpoint endpoint = client.createWebhookEndpoint(CreateWebhookEndpointReq
 storeWebhookSecret(endpoint.getSecret()); // whsec_...
 ```
 
-Store the secret at once. Only the first answer has it: a retry with the same key returns the
-endpoint without it. If you lose the secret, delete the endpoint and register it again.
+Store the secret at once. A replay of a create that already succeeded answers without it, so the
+client never retries this call. After a timeout or another `TransportException`, retry with the
+same key. If the answer has no secret, delete that endpoint and create it again with a new key.
 `listWebhookEndpoints` lists your endpoints, and `deleteWebhookEndpoint` removes one.
 
 ## Status polling
@@ -712,8 +739,13 @@ A new API field never needs a new SDK release:
 
 Every exception is unchecked and extends `DominaiteException`. Catch the subclass, and read
 `getCode()` for the machine-readable code when there is one. `getHttpStatus()` has the HTTP status,
-`getRequestId()` has the request id of the gateway for support, and `getIdempotencyKey()` has the
-key to reuse.
+`getRequestId()` has the request id for support, and `getIdempotencyKey()` has the key to reuse.
+The constants of every code are on `ErrorCodes`, with one list per route: `CHARGE`, `REFUND`,
+`REVOKE`, `RECURRING` (plans and agreements), `WEBHOOK` and `SESSION_REFUSALS`.
+
+The request id is the `Dominaite-Request-Id` response header when the response has one, else
+`metadata.requestId` in the body. Every result type has `getRequestId()` too. It is null when no
+response arrived.
 
 | Exception | When | What to do |
 |---|---|---|
@@ -722,9 +754,9 @@ key to reuse.
 | `AuthenticationException` | 401. The code is `INVALID_API_KEY`, `INVALID_SIGNATURE`, `TIMESTAMP_OUT_OF_RANGE` or `IP_NOT_ALLOWED`. | Fix the key id, the secret, the server clock or the allowlist. Never retry in a loop. |
 | `PermissionException` | 403. The key and the signature were good, but the call is not allowed. `VERIFY_ONLY_NOT_ENABLED` arrives as this type. | For verify-only, contact Dominaite support. Never retry in a loop. |
 | `InsufficientScopeException` | 403 `INSUFFICIENT_SCOPE`. A subclass of `PermissionException`. The message names the scope. | Use a key that has the scope. |
-| `RateLimitedException` | 429. A limit refused the call and nothing was done. The code is `RATE_LIMIT_EXCEEDED`, `CHARGE_VELOCITY_EXCEEDED` or `CHARGE_DECLINE_RATE_EXCEEDED`. `getRetryAfter()` is the `Retry-After` wait as a `Duration`, or null. | Wait `getRetryAfter()` (a few seconds when null), then retry with the **same** idempotency key. `isRetryable()` is false, and the retry helper does not retry it. |
-| `TransportException` | A network failure, a timeout or a 5xx, also one whose body is an HTML page from a proxy. | Retry with the **same** idempotency key. `isRetryable()` is always true. |
-| `ChargeException` | `chargePaymentMethod` got an error code instead of a charge. | See [Stored payment methods](#stored-payment-methods-recurring). |
+| `RateLimitedException` | 429. A limit refused the call and nothing was done. The code is `RATE_LIMIT_EXCEEDED`, `CHARGE_VELOCITY_EXCEEDED` or `CHARGE_DECLINE_RATE_EXCEEDED`. `getRetryAfter()` is the `Retry-After` wait as a `Duration`, or null. | Wait `getRetryAfter()` (a few seconds when null), then retry with the **same** idempotency key. `isRetryable()` is false, and the client never retries it. |
+| `TransportException` | A network failure, a timeout or a 5xx without a code of the route, also one whose body is an HTML page from a proxy. A coded 5xx keeps its code, such as `INTERNAL_ERROR`. On a call the client retries, it already did. | Retry later with the **same** idempotency key. `isRetryable()` is always true. |
+| `ChargeException` | `chargePaymentMethod` got an error code instead of a charge, also a 404 `PAYMENT_METHOD_NOT_FOUND` or `AGREEMENT_NOT_FOUND`. | See [Stored payment methods](#stored-payment-methods-recurring). |
 | `RefundException` | A refund call got an error code instead of a refund. | See [Refunds](#refunds). |
 | `RevokeException` | `revokePaymentMethod` was refused: 502 or 503. Nothing changed. | Retry later on 503. Contact support on 502. |
 | `ApiException` | Any other refusal or unexpected answer, also a 3xx. `getRawResult()` has the whole envelope: the field errors of a 400 are in `error.validationErrors`. | Read the status and the code. A 404 from `getStatus` is an unknown transaction id. |
@@ -737,7 +769,7 @@ key to reuse.
 Refusal codes on `RefusalException`, with constants on `ErrorCodes`:
 
 - `PAYMENT_PROCESSING_UNAVAILABLE`: card payments are off now and nothing was created. Retry with
-  the same key. `isRetryable()` is true, and the retry helper does it for you.
+  the same key. `isRetryable()` is true, and the client retries it for you.
 - `DUPLICATE_REQUEST`: an attempt with this key is unfinished, but its session cannot be given back
   now. Send the same key again shortly, never a fresh one.
 - `ALREADY_PROCESSED`: the payment of this key already completed.

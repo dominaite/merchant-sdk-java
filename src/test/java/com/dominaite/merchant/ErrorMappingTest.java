@@ -6,7 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -137,6 +140,61 @@ class ErrorMappingTest {
     }
 
     @Test
+    void aCodedCharge404IsAChargeException() throws Exception {
+        try (MockServer server = new MockServer()) {
+            server.respondError(404, "PAYMENT_METHOD_NOT_FOUND", "No stored payment method with this id.")
+                .respondError(404, "AGREEMENT_NOT_FOUND", "No agreement with this id.");
+            DominaiteClient client = server.client();
+
+            ChargeException method = assertThrows(ChargeException.class, () -> client.chargePaymentMethod(PM, charge()));
+            assertEquals(ErrorCodes.PAYMENT_METHOD_NOT_FOUND, method.getCode());
+            assertEquals(Integer.valueOf(404), method.getHttpStatus());
+            assertEquals("req-123", method.getRequestId());
+
+            ChargeException agreement = assertThrows(ChargeException.class, () -> client.chargePaymentMethod(PM, charge()));
+            assertEquals(ErrorCodes.AGREEMENT_NOT_FOUND, agreement.getCode());
+        }
+    }
+
+    @Test
+    void aCoded5xxThatTheRouteDoesNotOwnIsATransportErrorThatKeepsItsCode() throws Exception {
+        try (MockServer server = new MockServer()) {
+            server.respondError(500, "INTERNAL_ERROR", "An unexpected error occurred")
+                .respondError(500, "INTERNAL_ERROR", "An unexpected error occurred");
+            DominaiteClient client = server.builder().maxRetries(0).build();
+
+            TransportException charge = assertThrows(TransportException.class, () -> client.chargePaymentMethod(PM, charge()));
+            assertEquals(ErrorCodes.INTERNAL_ERROR, charge.getCode());
+            assertEquals(Integer.valueOf(500), charge.getHttpStatus());
+            assertTrue(charge.isRetryable());
+
+            TransportException revoke = assertThrows(TransportException.class, () -> client.revokePaymentMethod("pm_1"));
+            assertEquals(ErrorCodes.INTERNAL_ERROR, revoke.getCode());
+        }
+    }
+
+    @Test
+    void everyChargeErrorExampleOfTheContractIsAChargeException() throws Exception {
+        JsonNode endpoint = ContractTest.fixture("merchant-api-contract.json").get("endpoints").get("chargePaymentMethod");
+        List<JsonNode> examples = new ArrayList<>();
+        endpoint.get("errorExamples").forEach(examples::add);
+        examples.add(endpoint.get("notFoundExample"));
+        for (JsonNode example : examples) {
+            String code = example.get("code").asText();
+            try (MockServer server = new MockServer()) {
+                server.respond(example.get("httpStatus").asInt(), example.get("body").toString());
+
+                // No retry: PAYMENT_PROCESSING_UNAVAILABLE is one of the examples.
+                ChargeException error = assertThrows(ChargeException.class,
+                    () -> server.builder().maxRetries(0).build().chargePaymentMethod(PM, charge()), code);
+
+                assertEquals(code, error.getCode());
+                assertEquals(example.get("body").get("metadata").get("requestId").asText(), error.getRequestId(), code);
+            }
+        }
+    }
+
+    @Test
     void a400ValidationErrorIsAnApiExceptionWithTheEnvelope() throws Exception {
         try (MockServer server = new MockServer()) {
             server.respondError(400, "VALIDATION_ERROR", "currency is invalid");
@@ -155,7 +213,8 @@ class ErrorMappingTest {
         try (MockServer server = new MockServer()) {
             server.respondError(503, "MERCHANT_API_UNAVAILABLE", "down");
 
-            TransportException error = assertThrows(TransportException.class, () -> server.client().ping());
+            TransportException error = assertThrows(TransportException.class,
+                () -> server.builder().maxRetries(0).build().ping());
 
             assertEquals(Integer.valueOf(503), error.getHttpStatus());
             assertEquals(ErrorCodes.MERCHANT_API_UNAVAILABLE, error.getCode());
@@ -188,7 +247,7 @@ class ErrorMappingTest {
     @Test
     void anUnreachableHostIsARetryableTransportError() {
         DominaiteClient client = DominaiteClient.builder().keyId(MockServer.KEY_ID).secret(MockServer.SECRET)
-            .baseUrl("http://127.0.0.1:1").timeout(Duration.ofSeconds(2)).build();
+            .baseUrl("http://127.0.0.1:1").timeout(Duration.ofSeconds(2)).maxRetries(0).build();
 
         TransportException error = assertThrows(TransportException.class, client::ping);
 
@@ -307,6 +366,10 @@ class ErrorMappingTest {
                 () -> client.createCheckoutSession(ClientWireTest.session().amount(100).verifyOnly(true).build()));
             assertThrows(ValidationException.class,
                 () -> client.createCheckoutSession(ClientWireTest.session().orderReference(" ").build()));
+            assertThrows(ValidationException.class,
+                () -> client.createCheckoutSession(ClientWireTest.session().currency("eur").build()));
+            assertThrows(ValidationException.class, () -> client.chargePaymentMethod(PM, ChargeRequest.builder()
+                .amount(100).currency("EURO").orderReference("o").idempotencyKey("k").build()));
             assertThrows(ValidationException.class, () -> client.getStatus("not-a-uuid"));
             assertThrows(ValidationException.class, () -> client.chargePaymentMethod("pm/1", charge()));
             assertThrows(ValidationException.class, () -> client.deleteWebhookEndpoint("hook_1"));

@@ -2,6 +2,7 @@ package com.dominaite.merchant;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import java.time.Instant;
 
 /**
@@ -19,6 +20,8 @@ public final class ChargeEventData {
     private Integer attemptNumber;
     private long amount;
     private String currency;
+    @JsonDeserialize(using = ChargeEventPaymentMethod.Tolerant.class)
+    private ChargeEventPaymentMethod paymentMethod;
     private String orderReference;
     private String description;
     private String declineClass;
@@ -70,6 +73,14 @@ public final class ChargeEventData {
 
     public String getCurrency() {
         return currency;
+    }
+
+    /**
+     * The charged card, or null when the event has none or it has an unexpected shape. Read
+     * {@code getRaw().get("paymentMethod")} for the field as sent.
+     */
+    public ChargeEventPaymentMethod getPaymentMethod() {
+        return paymentMethod;
     }
 
     public String getOrderReference() {

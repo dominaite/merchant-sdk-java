@@ -8,7 +8,7 @@ import java.time.Instant;
  * The status of a payment, read with {@link DominaiteClient#getStatus}. Status values are
  * plain strings: see {@link TransactionStatuses}.
  */
-public final class CheckoutStatus {
+public final class CheckoutStatus extends ApiResult {
 
     private String transactionId;
     private String orderId;

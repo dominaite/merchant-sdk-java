@@ -6,9 +6,9 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * A webhook endpoint. {@link #getSecret()} is set only in the create answer: store it then.
+ * A webhook endpoint. {@link #getSecret()} is set only in the first create answer: store it then.
  */
-public final class WebhookEndpoint {
+public final class WebhookEndpoint extends ApiResult {
 
     private String id;
     private String url;
@@ -43,7 +43,7 @@ public final class WebhookEndpoint {
         return createdAt;
     }
 
-    /** The {@code whsec_} signing secret, only in the create answer. Never log it. */
+    /** The {@code whsec_} signing secret, or null in a replay or a read. Never log it. */
     public String getSecret() {
         return secret;
     }

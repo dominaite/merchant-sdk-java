@@ -7,7 +7,7 @@ import java.time.Instant;
 /**
  * A subscription plan.
  */
-public final class Plan {
+public final class Plan extends ApiResult {
 
     private String id;
     private String name;

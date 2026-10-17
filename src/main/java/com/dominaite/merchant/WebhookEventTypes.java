@@ -29,6 +29,11 @@ public final class WebhookEventTypes {
         PAYMENT_SUCCEEDED, PAYMENT_FAILED, PAYMENT_REQUIRES_CAPTURE, PAYMENT_CANCELLED,
         PAYMENT_ABANDONED, PAYMENT_REFUNDED, PAYMENT_DISPUTED);
 
+    /** The subscription events of the public contract's {@code recurring.webhookEvents}, in its order. */
+    public static final List<String> RECURRING = ErrorCodes.list(
+        AGREEMENT_ACTIVATED, AGREEMENT_PAST_DUE, AGREEMENT_CANCELLED, CHARGE_SUCCEEDED, CHARGE_FAILED,
+        CHARGE_RETRYING);
+
     private WebhookEventTypes() {
     }
 }
