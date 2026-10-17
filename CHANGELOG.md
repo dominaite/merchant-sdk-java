@@ -13,6 +13,19 @@
 - The base URL must be `https://`. `http://` is accepted only for localhost, 127.0.0.1 and ::1,
   the same rule as the other SDKs. `build()` throws `ValidationException` for anything else.
 
+### Added
+
+- User-Agent `dominaite-java/<version> (java <java.version>)`, then the `userAgentSuffix` after one
+  space. A suffix with a control character throws `ValidationException`.
+- Warning hook: `Builder.onWarning(Consumer<String>)`. Without it, warnings go to
+  `System.getLogger("com.dominaite.merchant")` at `WARNING`. The SDK warns when the
+  `Dominaite-Sdk-Notice` response header marks this version as deprecated (once per distinct
+  notice), when `createCheckoutSessionWithRetry` retries after a failure, and when `ping()` reports
+  a clock skew over 60 seconds.
+- Debug log: `Builder.onDebug(Consumer<String>)`, off by default. One line per request with the
+  method, the path, the status, the time in milliseconds, the `Dominaite-Request-Id` response
+  header and the idempotency key. No line holds the secret, the signature, a cashier token or a body.
+
 ## 0.5.2
 
 The first release of the Java SDK. It has the same API surface as version 0.5.2 of the Node,

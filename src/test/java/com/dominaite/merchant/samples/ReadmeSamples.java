@@ -281,6 +281,23 @@ final class ReadmeSamples {
     private static void bringThePayerBack() {
     }
 
+    /** Stands in for the application's own logger, such as SLF4J. */
+    interface AppLog {
+        void warn(String message);
+
+        void debug(String message);
+    }
+
+    static void loggingAndWarnings(AppLog log) {
+        DominaiteClient client = DominaiteClient.builder()
+            .keyId(System.getenv("DOMINAITE_KEY_ID"))
+            .secret(System.getenv("DOMINAITE_SECRET"))
+            .baseUrl(System.getenv("DOMINAITE_BASE_URL"))
+            .onWarning(message -> log.warn(message))
+            .onDebug(line -> log.debug(line))   // leave out in production
+            .build();
+    }
+
     private static void retryLater(String idempotencyKey) {
     }
 
