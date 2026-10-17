@@ -96,9 +96,15 @@ public final class DominaiteClient {
         }
         this.timeout = b.timeout;
 
-        this.userAgent = b.userAgentSuffix == null || b.userAgentSuffix.trim().isEmpty()
-            ? "dominaite-java/" + VERSION
-            : "dominaite-java/" + VERSION + " " + b.userAgentSuffix.trim();
+        String suffix = b.userAgentSuffix == null ? "" : b.userAgentSuffix.trim();
+        for (int i = 0; i < suffix.length(); i++) {
+            char c = suffix.charAt(i);
+            if (c < 0x20 || c == 0x7F) {
+                throw new ValidationException("userAgentSuffix must not contain control characters");
+            }
+        }
+        String product = "dominaite-java/" + VERSION + " (java " + System.getProperty("java.version", "unknown") + ")";
+        this.userAgent = suffix.isEmpty() ? product : product + " " + suffix;
 
         // The API never redirects. Following a 3xx would replay a signed request at whatever
         // host the redirect names, so the client the SDK builds never follows one.
@@ -119,7 +125,10 @@ public final class DominaiteClient {
         return baseUrl;
     }
 
-    /** The User-Agent this client sends. */
+    /**
+     * The User-Agent this client sends: {@code dominaite-java/<version> (java <java.version>)},
+     * then the {@link Builder#userAgentSuffix suffix} when set.
+     */
     public String getUserAgent() {
         return userAgent;
     }
@@ -1023,7 +1032,11 @@ public final class DominaiteClient {
             return this;
         }
 
-        /** Appended to the User-Agent. It helps Dominaite support find your calls in the logs. */
+        /**
+         * Appended to the User-Agent after one space. It helps Dominaite support find your calls
+         * in the logs. Trimmed; blank means none. A control character fails {@link #build()} with
+         * {@link ValidationException}.
+         */
         public Builder userAgentSuffix(String userAgentSuffix) {
             this.userAgentSuffix = userAgentSuffix;
             return this;
