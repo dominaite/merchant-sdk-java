@@ -6,7 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -133,6 +136,60 @@ class ErrorMappingTest {
             assertEquals(Integer.valueOf(409), error.getHttpStatus());
             assertEquals("charge-1043", error.getIdempotencyKey());
             assertTrue(error instanceof ApiException);
+        }
+    }
+
+    @Test
+    void aCodedCharge404IsAChargeException() throws Exception {
+        try (MockServer server = new MockServer()) {
+            server.respondError(404, "PAYMENT_METHOD_NOT_FOUND", "No stored payment method with this id.")
+                .respondError(404, "AGREEMENT_NOT_FOUND", "No agreement with this id.");
+            DominaiteClient client = server.client();
+
+            ChargeException method = assertThrows(ChargeException.class, () -> client.chargePaymentMethod(PM, charge()));
+            assertEquals(ErrorCodes.PAYMENT_METHOD_NOT_FOUND, method.getCode());
+            assertEquals(Integer.valueOf(404), method.getHttpStatus());
+            assertEquals("req-123", method.getRequestId());
+
+            ChargeException agreement = assertThrows(ChargeException.class, () -> client.chargePaymentMethod(PM, charge()));
+            assertEquals(ErrorCodes.AGREEMENT_NOT_FOUND, agreement.getCode());
+        }
+    }
+
+    @Test
+    void aCoded5xxThatTheRouteDoesNotOwnIsATransportErrorThatKeepsItsCode() throws Exception {
+        try (MockServer server = new MockServer()) {
+            server.respondError(500, "INTERNAL_ERROR", "An unexpected error occurred")
+                .respondError(500, "INTERNAL_ERROR", "An unexpected error occurred");
+            DominaiteClient client = server.client();
+
+            TransportException charge = assertThrows(TransportException.class, () -> client.chargePaymentMethod(PM, charge()));
+            assertEquals(ErrorCodes.INTERNAL_ERROR, charge.getCode());
+            assertEquals(Integer.valueOf(500), charge.getHttpStatus());
+            assertTrue(charge.isRetryable());
+
+            TransportException revoke = assertThrows(TransportException.class, () -> client.revokePaymentMethod("pm_1"));
+            assertEquals(ErrorCodes.INTERNAL_ERROR, revoke.getCode());
+        }
+    }
+
+    @Test
+    void everyChargeErrorExampleOfTheContractIsAChargeException() throws Exception {
+        JsonNode endpoint = ContractTest.fixture("merchant-api-contract.json").get("endpoints").get("chargePaymentMethod");
+        List<JsonNode> examples = new ArrayList<>();
+        endpoint.get("errorExamples").forEach(examples::add);
+        examples.add(endpoint.get("notFoundExample"));
+        for (JsonNode example : examples) {
+            String code = example.get("code").asText();
+            try (MockServer server = new MockServer()) {
+                server.respond(example.get("httpStatus").asInt(), example.get("body").toString());
+
+                ChargeException error = assertThrows(ChargeException.class,
+                    () -> server.client().chargePaymentMethod(PM, charge()), code);
+
+                assertEquals(code, error.getCode());
+                assertEquals(example.get("body").get("metadata").get("requestId").asText(), error.getRequestId(), code);
+            }
         }
     }
 

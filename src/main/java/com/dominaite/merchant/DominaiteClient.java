@@ -304,7 +304,9 @@ public final class DominaiteClient {
             }
             if (reply.status >= 400) {
                 String code = reply.errorCode();
-                if (code != null && !isGenericFailureStatus(reply.status)) {
+                // A 404 with a code is a charge refusal too: PAYMENT_METHOD_NOT_FOUND or
+                // AGREEMENT_NOT_FOUND.
+                if (code != null && reply.status != 400 && ownsCode(reply.status, code, ErrorCodes.CHARGE)) {
                     String message = reply.errorMessage();
                     throw reply.tag(new ChargeException(
                         reply.status, code, message != null ? message : "The charge was refused.", charge, reply.envelope));
@@ -330,7 +332,9 @@ public final class DominaiteClient {
             return;
         }
         String code = reply.errorCode();
-        if (code != null && !isGenericFailureStatus(reply.status)) {
+        // A 404 is an unknown id, with a generic code.
+        if (code != null && reply.status != 400 && reply.status != 404
+                && ownsCode(reply.status, code, ErrorCodes.REVOKE)) {
             String message = reply.errorMessage();
             throw reply.tag(new RevokeException(
                 reply.status, code, message != null ? message : "The revoke was refused.", reply.envelope));
@@ -748,8 +752,13 @@ public final class DominaiteClient {
             + normalizeHandle(agreementId, "agreementId must be the Agreement.getId() from createAgreement");
     }
 
-    private static boolean isGenericFailureStatus(int status) {
-        return status == 400 || status == 404;
+    /**
+     * True when a coded refusal belongs to the route's own error type. A 5xx belongs to it only
+     * with one of the route's codes. A 5xx with a generic code, such as {@code INTERNAL_ERROR},
+     * is a {@link TransportException} that keeps the code.
+     */
+    private static boolean ownsCode(int status, String code, List<String> routeCodes) {
+        return status < 500 || routeCodes.contains(code);
     }
 
     /** Runs a step and stamps the idempotency key on any SDK error it throws. */
