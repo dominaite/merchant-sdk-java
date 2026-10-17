@@ -590,8 +590,9 @@ try {
 parses the body into a `WebhookEvent`: `getId()`, `getType()`, `getApiVersion()`, `getCreatedAt()`,
 `getData()` (the raw `data` object), and typed data. `getPayment()` is set for `payment.*` and
 `verification.*` events, `getAgreement()` for `agreement.*` events and `getCharge()` for `charge.*`
-events. A body that verifies but is not a readable envelope throws with
-`WebhookFailureReason.MALFORMED_PAYLOAD`. Both methods have overloads for a `byte[]` and a `String`
+events. When the data does not map to the typed model, for example a number sent as text, the
+typed getter is null, the event still verifies and `getData()` keeps the data as sent. A body that
+verifies but is not a readable envelope throws with `WebhookFailureReason.MALFORMED_PAYLOAD`. Both methods have overloads for a `byte[]` and a `String`
 body, and for your own tolerance and clock: `(payload, signatureHeader, secret, toleranceSeconds,
 nowUnixSeconds)`.
 
