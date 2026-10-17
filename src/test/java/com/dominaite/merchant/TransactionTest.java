@@ -50,6 +50,15 @@ class TransactionTest {
     }
 
     @Test
+    void fromAndToNeverCarryMoreThanTheSevenFractionalDigitsTheGatewayReads() {
+        String query = DominaiteClient.transactionQuery(ListTransactionsRequest.builder()
+            .from(Instant.parse("2026-10-01T00:00:00.123456789Z")).to(Instant.parse("2026-10-02T00:00:00.000000100Z"))
+            .build());
+
+        assertEquals("from=2026-10-01T00%3A00%3A00.123456Z&to=2026-10-02T00%3A00%3A00Z", query);
+    }
+
+    @Test
     void onlyTheSetParametersAreSentAndExtrasNeverOverrideThem() {
         String query = DominaiteClient.transactionQuery(ListTransactionsRequest.builder()
             .from(Instant.parse("2026-10-01T00:00:00.5Z")).to(TO)

@@ -25,6 +25,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 
 /**
@@ -72,9 +73,12 @@ final class Json {
         }
     }
 
-    /** ISO 8601 UTC with Z, and fractional seconds only when there are any. */
+    /**
+     * ISO 8601 UTC with Z, and fractional seconds only when there are any. The gateway reads at
+     * most 7 fractional digits, so the value is cut to microseconds (at most 6).
+     */
     static String formatInstant(Instant instant) {
-        return DateTimeFormatter.ISO_INSTANT.format(instant);
+        return DateTimeFormatter.ISO_INSTANT.format(instant.truncatedTo(ChronoUnit.MICROS));
     }
 
     static String text(JsonNode node, String field) {
