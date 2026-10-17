@@ -17,7 +17,7 @@
   `instanceof` tests: a `ChargeException` branch now also gets these 404s.
 - A charge or revoke answered 5xx with a code the route does not own, such as `INTERNAL_ERROR`,
   throws `TransportException` with that code, not `ChargeException` or `RevokeException`. The
-  client retries it.
+  client retries it on a charge. It never retries a revoke, which is a DELETE.
 - `createPlan` throws `ValidationException` and sends nothing when the amount is not positive. An
   unset amount was sent as 0.
 - `ErrorCodes.CHARGE`, `ErrorCodes.SESSION_REFUSALS` and `ErrorCodes.REFUND` list every code the
