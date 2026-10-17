@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 /**
@@ -67,6 +68,7 @@ public final class DominaiteClient {
     private final Duration timeout;
     private final String userAgent;
     private final HttpClient http;
+    private final Diagnostics diagnostics;
 
     private DominaiteClient(Builder b) {
         if (b.keyId == null || !b.keyId.startsWith(KEY_ID_PREFIX)) {
@@ -105,6 +107,8 @@ public final class DominaiteClient {
         }
         String product = "dominaite-java/" + VERSION + " (java " + System.getProperty("java.version", "unknown") + ")";
         this.userAgent = suffix.isEmpty() ? product : product + " " + suffix;
+
+        this.diagnostics = new Diagnostics(b.onWarning, b.onDebug);
 
         // The API never redirects. Following a 3xx would replay a signed request at whatever
         // host the redirect names, so the client the SDK builds never follows one.
@@ -149,7 +153,9 @@ public final class DominaiteClient {
     public PingResponse ping() {
         Reply reply = send("GET", PING_PATH, "", "", "");
         reply.failOnError();
-        return reply.read(reply.payload(), PingResponse.class, "ping");
+        PingResponse ping = reply.read(reply.payload(), PingResponse.class, "ping");
+        diagnostics.clockSkew(ping.getClockSkewSeconds());
+        return ping;
     }
 
     /**
@@ -243,6 +249,7 @@ public final class DominaiteClient {
                 }
                 last = error;
                 if (attempt + 1 < attempts) {
+                    diagnostics.retrying("createCheckoutSessionWithRetry", error, attempt + 2, attempts);
                     sleep(baseDelay.multipliedBy(1L << Math.min(attempt, 16)));
                 }
             }
@@ -598,19 +605,27 @@ public final class DominaiteClient {
         }
 
         HttpResponse<String> response;
+        long started = System.nanoTime();
         try {
             response = http.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         } catch (HttpTimeoutException e) {
+            diagnostics.request(method, path, null, System.nanoTime() - started, null, idempotencyKey);
             throw new TransportException(
                 "The Dominaite API did not answer in time; retry with the same idempotency key.", null, null, e);
         } catch (IOException e) {
+            diagnostics.request(method, path, null, System.nanoTime() - started, null, idempotencyKey);
             throw new TransportException("Could not reach the Dominaite API: " + e.getMessage(), null, null, e);
         } catch (InterruptedException e) {
+            diagnostics.request(method, path, null, System.nanoTime() - started, null, idempotencyKey);
             Thread.currentThread().interrupt();
             throw new TransportException("The call to the Dominaite API was interrupted.", null, null, e);
         }
 
         int status = response.statusCode();
+        // Every response, success or error, can carry the request id and the SDK notice.
+        diagnostics.request(method, path, status, System.nanoTime() - started,
+            response.headers().firstValue(Diagnostics.REQUEST_ID_HEADER).orElse(null), idempotencyKey);
+        diagnostics.notice(response.headers().firstValue(Diagnostics.NOTICE_HEADER).orElse(null));
         // The API never redirects. A 3xx is a hard error, never retried.
         if (status >= 300 && status < 400) {
             throw new ApiException(status, null,
@@ -998,6 +1013,8 @@ public final class DominaiteClient {
         private Duration timeout = DEFAULT_TIMEOUT;
         private String userAgentSuffix;
         private HttpClient httpClient;
+        private Consumer<String> onWarning;
+        private Consumer<String> onDebug;
 
         private Builder() {
         }
@@ -1023,6 +1040,28 @@ public final class DominaiteClient {
          */
         public Builder baseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
+            return this;
+        }
+
+        /**
+         * Receives the SDK's warnings: a deprecation notice from the API (once per distinct
+         * notice), a retry in {@link #createCheckoutSessionWithRetry}, and a ping clock skew over
+         * 60 seconds. Without a hook they go to {@code System.getLogger("com.dominaite.merchant")}
+         * at WARNING. An exception from the hook is dropped, never thrown at the caller.
+         */
+        public Builder onWarning(Consumer<String> onWarning) {
+            this.onWarning = onWarning;
+            return this;
+        }
+
+        /**
+         * Switches the debug log on: one line per HTTP request with the method, the path, the
+         * status, the time in milliseconds, the {@code Dominaite-Request-Id} response header and
+         * the idempotency key. Off when unset. A line never holds the secret, the signature, a
+         * cashier token or a body. An exception from the hook is dropped.
+         */
+        public Builder onDebug(Consumer<String> onDebug) {
+            this.onDebug = onDebug;
             return this;
         }
 
