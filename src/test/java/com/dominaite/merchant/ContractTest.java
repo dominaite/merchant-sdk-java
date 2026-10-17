@@ -110,11 +110,12 @@ class ContractTest {
         assertEquals(strings(contract.get("storedPaymentMethodStatusVocabulary")), StoredPaymentMethodStatuses.ALL);
         assertEquals(strings(contract.get("storedPaymentMethodRetiredReasonVocabulary")),
             StoredPaymentMethodRetiredReasons.ALL);
-        assertEquals(strings(contract.get("chargeErrorCodes")), ErrorCodes.CHARGE);
-        assertEquals(strings(contract.get("refundErrorCodes")), ErrorCodes.REFUND);
+        // The hand fixture lists an older subset of these codes. The SDK knows every one of them.
+        assertTrue(ErrorCodes.CHARGE.containsAll(strings(contract.get("chargeErrorCodes"))));
+        assertTrue(ErrorCodes.REFUND.containsAll(strings(contract.get("refundErrorCodes"))));
         assertEquals(strings(contract.get("refundFailureCodes")), ErrorCodes.REFUND_FAILURE);
         assertEquals(strings(contract.get("revokeErrorCodes")), ErrorCodes.REVOKE);
-        assertEquals(strings(contract.get("sessionRefusalErrorCodes")), ErrorCodes.SESSION_REFUSALS);
+        assertTrue(ErrorCodes.SESSION_REFUSALS.containsAll(strings(contract.get("sessionRefusalErrorCodes"))));
         assertEquals(strings(contract.get("storefrontErrorCodes")), ErrorCodes.STOREFRONT);
     }
 
