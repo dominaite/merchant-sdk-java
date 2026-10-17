@@ -123,7 +123,7 @@ class RequestIdTest {
     void errorsWithoutAJsonBodyTakeTheHeader() throws Exception {
         try (MockServer server = new MockServer()) {
             server.respond(502, "Bad gateway", HEADER).respond(429, "", HEADER).respond(404, "<html>", HEADER);
-            DominaiteClient client = server.client();
+            DominaiteClient client = server.builder().maxRetries(0).build();
 
             assertEquals("req-header", assertThrows(TransportException.class, client::ping).getRequestId());
             assertEquals("req-header", assertThrows(RateLimitedException.class, client::ping).getRequestId());
@@ -163,7 +163,7 @@ class RequestIdTest {
             for (JsonNode example : endpoints.get(route).get("errorExamples")) {
                 try (MockServer server = new MockServer()) {
                     server.respond(example.get("httpStatus").asInt(), example.get("body").toString());
-                    DominaiteClient client = server.client();
+                    DominaiteClient client = server.builder().maxRetries(0).build();
                     DominaiteException error = assertThrows(DominaiteException.class, () -> {
                         if (route.equals("createRefund")) {
                             client.createRefund(TX, RefundRequest.builder().idempotencyKey("refund-1").build());

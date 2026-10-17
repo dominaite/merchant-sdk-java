@@ -22,7 +22,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
+import java.util.function.DoubleSupplier;
 import java.util.regex.Pattern;
 
 /**
@@ -42,6 +44,15 @@ public final class DominaiteClient {
 
     /** The default per-request timeout. Cold starts outside production can take 10+ seconds. */
     public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(45);
+
+    /** The default number of retries after the first attempt. */
+    public static final int DEFAULT_MAX_RETRIES = 2;
+
+    /** The wait before the first retry is random between 0 and this. It doubles for each retry. */
+    public static final Duration RETRY_BASE_DELAY = Duration.ofMillis(500);
+
+    /** The longest wait between two attempts. */
+    public static final Duration RETRY_MAX_DELAY = Duration.ofSeconds(8);
 
     /** The SDK version, also sent in the User-Agent. */
     public static final String VERSION = "0.6.0";
@@ -70,6 +81,9 @@ public final class DominaiteClient {
     private final String userAgent;
     private final HttpClient http;
     private final Diagnostics diagnostics;
+    private final int maxRetries;
+    private final Sleeper sleeper;
+    private final DoubleSupplier random;
 
     private DominaiteClient(Builder b) {
         if (b.keyId == null || !b.keyId.startsWith(KEY_ID_PREFIX)) {
@@ -111,6 +125,13 @@ public final class DominaiteClient {
 
         this.diagnostics = new Diagnostics(b.onWarning, b.onDebug);
 
+        if (b.maxRetries < 0) {
+            throw new ValidationException("maxRetries must be 0 or more");
+        }
+        this.maxRetries = b.maxRetries;
+        this.sleeper = b.sleeper != null ? b.sleeper : delay -> Thread.sleep(delay.toMillis());
+        this.random = b.random != null ? b.random : () -> ThreadLocalRandom.current().nextDouble();
+
         // The API never redirects. Following a 3xx would replay a signed request at whatever
         // host the redirect names, so the client the SDK builds never follows one.
         this.http = b.httpClient != null
@@ -123,6 +144,11 @@ public final class DominaiteClient {
 
     public static Builder builder() {
         return new Builder();
+    }
+
+    /** The retries after the first attempt of a GET or a POST with an idempotency key. */
+    public int getMaxRetries() {
+        return maxRetries;
     }
 
     /** The API this client calls, without a trailing slash. */
@@ -152,9 +178,11 @@ public final class DominaiteClient {
      * @return the merchant id and the clock skew
      */
     public PingResponse ping() {
-        Reply reply = send("GET", PING_PATH, "", "", "");
-        reply.failOnError();
-        PingResponse ping = reply.read(reply.payload(), PingResponse.class, "ping");
+        PingResponse ping = retrying("ping", () -> {
+            Reply reply = send("GET", PING_PATH, "", "", "");
+            reply.failOnError();
+            return reply.read(reply.payload(), PingResponse.class, "ping");
+        });
         diagnostics.clockSkew(ping.getClockSkewSeconds());
         return ping;
     }
@@ -164,8 +192,10 @@ public final class DominaiteClient {
      * versions. Every key can call it.
      */
     public IntegrationContract getIntegrationContract() {
-        Reply reply = send("GET", INTEGRATION_CONTRACT_PATH, "", "", "");
-        return reply.read(reply.readObject("integration contract"), IntegrationContract.class, "integration contract");
+        return retrying("getIntegrationContract", () -> {
+            Reply reply = send("GET", INTEGRATION_CONTRACT_PATH, "", "", "");
+            return reply.read(reply.readObject("integration contract"), IntegrationContract.class, "integration contract");
+        });
     }
 
     // ---------------------------------------------------------------- checkout sessions
@@ -179,14 +209,19 @@ public final class DominaiteClient {
      * @throws StorefrontException when the storefront configuration refuses the session
      */
     public CheckoutSession createCheckoutSession(CheckoutSessionRequest request) {
+        return retrying("createCheckoutSession", checkoutAttempt(request));
+    }
+
+    /** Checks and serializes the request once. Each run of the step is one attempt. */
+    private Step<CheckoutSession> checkoutAttempt(CheckoutSessionRequest request) {
         Objects.requireNonNull(request, "request");
         String key = IdempotencyKeys.validate(request.getIdempotencyKey());
         validateMoney(request.getAmount(), request.getCurrency(), request.getOrderReference(),
             Boolean.TRUE.equals(request.getVerifyOnly()));
         String body = Json.body(request, request.getExtra());
 
-        Reply reply = withKey(key, () -> send("POST", SESSIONS_PATH, "", body, key));
-        return withKey(key, () -> {
+        return () -> withKey(key, () -> {
+            Reply reply = send("POST", SESSIONS_PATH, "", body, key);
             // The storefront codes arrive as a real HTTP 409 or 400. They are configuration,
             // not input, so they get their own type.
             if (reply.status >= 400) {
@@ -221,46 +256,34 @@ public final class DominaiteClient {
     }
 
     /**
-     * Opens a checkout session and retries the retryable failures with the same idempotency
-     * key: transport failures, HTTP 5xx and {@code PAYMENT_PROCESSING_UNAVAILABLE}. The wait
-     * starts at {@code baseDelay} and doubles each attempt.
+     * Opens a checkout session with its own retry count and base delay, in place of the
+     * client's. It retries what the client retries, with the same idempotency key.
      *
      * @param request the session; the idempotency key is required
      * @param attempts total attempts including the first; at least 1
-     * @param baseDelay the wait before the first retry
+     * @param baseDelay the longest wait before the first retry; it doubles each retry
      * @return the session
+     * @deprecated {@link #createCheckoutSession} retries by itself. Set the count with
+     *     {@link Builder#maxRetries(int)}.
      */
+    @Deprecated
     public CheckoutSession createCheckoutSessionWithRetry(
             CheckoutSessionRequest request, int attempts, Duration baseDelay) {
-        Objects.requireNonNull(request, "request");
         Objects.requireNonNull(baseDelay, "baseDelay");
         if (attempts < 1) {
             throw new ValidationException("attempts must be at least 1");
         }
-        // Checked once, up front, so a missing key fails before the first attempt.
-        IdempotencyKeys.validate(request.getIdempotencyKey());
-
-        DominaiteException last = null;
-        for (int attempt = 0; attempt < attempts; attempt++) {
-            try {
-                return createCheckoutSession(request);
-            } catch (DominaiteException error) {
-                if (!error.isRetryable()) {
-                    throw error;
-                }
-                last = error;
-                if (attempt + 1 < attempts) {
-                    diagnostics.retrying("createCheckoutSessionWithRetry", error, attempt + 2, attempts);
-                    sleep(baseDelay.multipliedBy(1L << Math.min(attempt, 16)));
-                }
-            }
-        }
-        throw last;
+        return retrying("createCheckoutSessionWithRetry", attempts - 1, baseDelay, checkoutAttempt(request));
     }
 
-    /** {@link #createCheckoutSessionWithRetry(CheckoutSessionRequest, int, Duration)} with 3 attempts from 500 ms. */
+    /**
+     * {@link #createCheckoutSessionWithRetry(CheckoutSessionRequest, int, Duration)} with 3 attempts from 500 ms.
+     *
+     * @deprecated {@link #createCheckoutSession} retries by itself.
+     */
+    @Deprecated
     public CheckoutSession createCheckoutSessionWithRetry(CheckoutSessionRequest request) {
-        return createCheckoutSessionWithRetry(request, 3, Duration.ofMillis(500));
+        return createCheckoutSessionWithRetry(request, 3, RETRY_BASE_DELAY);
     }
 
     /**
@@ -271,9 +294,11 @@ public final class DominaiteClient {
      */
     public CheckoutStatus getStatus(String transactionId) {
         String path = SESSIONS_PATH + "/" + normalizeTransactionId(transactionId);
-        Reply reply = send("GET", path, "", "", "");
-        reply.failOnError();
-        return reply.read(reply.payload(), CheckoutStatus.class, "status");
+        return retrying("getStatus", () -> {
+            Reply reply = send("GET", path, "", "", "");
+            reply.failOnError();
+            return reply.read(reply.payload(), CheckoutStatus.class, "status");
+        });
     }
 
     // ---------------------------------------------------------------- stored payment methods
@@ -295,8 +320,8 @@ public final class DominaiteClient {
         String body = Json.body(request, request.getExtra());
         String path = PAYMENT_METHODS_PATH + "/" + id + "/charges";
 
-        Reply reply = withKey(key, () -> send("POST", path, "", body, key));
-        return withKey(key, () -> {
+        return retrying("chargePaymentMethod", () -> withKey(key, () -> {
+            Reply reply = send("POST", path, "", body, key);
             // 201 (200 on a replay): the charge was placed, whatever its status. 402: the
             // provider declined; the charge is in the body with status failed.
             PaymentMethodCharge charge = reply.charge();
@@ -316,7 +341,7 @@ public final class DominaiteClient {
             }
             throw reply.tag(new ApiException(
                 reply.status, null, "The Dominaite API answered the charge without a charge body.", reply.envelope));
-        });
+        }));
     }
 
     /**
@@ -364,21 +389,20 @@ public final class DominaiteClient {
         String body = Json.body(request, request.getExtra());
         String path = PAYMENTS_PATH + "/" + id + "/refunds";
 
-        Reply reply = withKey(key, () -> send("POST", path, "", body, key));
-        return withKey(key, reply::readRefund);
+        return retrying("createRefund", () -> withKey(key, () -> send("POST", path, "", body, key).readRefund()));
     }
 
     /** Reads one refund of a payment. */
     public Refund getRefund(String transactionId, String refundId) {
         String path = PAYMENTS_PATH + "/" + normalizeTransactionId(transactionId) + "/refunds/"
             + normalizeHandle(refundId, "refundId must be the Refund.getRefundId() from createRefund");
-        return send("GET", path, "", "", "").readRefund();
+        return retrying("getRefund", () -> send("GET", path, "", "", "").readRefund());
     }
 
     /** Lists the refunds of a payment, with the refunded and the refundable amount. */
     public RefundList listRefunds(String transactionId) {
         String path = PAYMENTS_PATH + "/" + normalizeTransactionId(transactionId) + "/refunds";
-        return send("GET", path, "", "", "").readRefundList();
+        return retrying("listRefunds", () -> send("GET", path, "", "", "").readRefundList());
     }
 
     // ---------------------------------------------------------------- plans
@@ -392,20 +416,27 @@ public final class DominaiteClient {
             throw new ValidationException("amount must be a positive integer in MINOR units (e.g. 999 for 9.99 EUR)");
         }
         String body = Json.body(request, request.getExtra());
-        Reply reply = withKey(key, () -> send("POST", PLANS_PATH, "", body, key));
-        return withKey(key, () -> reply.read(reply.readObject("plan"), Plan.class, "plan"));
+        return retrying("createPlan", () -> withKey(key, () -> {
+            Reply reply = send("POST", PLANS_PATH, "", body, key);
+            return reply.read(reply.readObject("plan"), Plan.class, "plan");
+        }));
     }
 
     /** Lists your plans. */
     public List<Plan> listPlans() {
-        Reply reply = send("GET", PLANS_PATH, "", "", "");
-        return reply.readList(reply.readArray("plan list"), Plan.class, "plan");
+        return retrying("listPlans", () -> {
+            Reply reply = send("GET", PLANS_PATH, "", "", "");
+            return reply.readList(reply.readArray("plan list"), Plan.class, "plan");
+        });
     }
 
     /** Reads one plan. */
     public Plan getPlan(String planId) {
-        Reply reply = send("GET", planPath(planId), "", "", "");
-        return reply.read(reply.readObject("plan"), Plan.class, "plan");
+        String path = planPath(planId);
+        return retrying("getPlan", () -> {
+            Reply reply = send("GET", path, "", "", "");
+            return reply.read(reply.readObject("plan"), Plan.class, "plan");
+        });
     }
 
     /**
@@ -435,14 +466,19 @@ public final class DominaiteClient {
         Objects.requireNonNull(request, "request");
         String key = IdempotencyKeys.validate(request.getIdempotencyKey());
         String body = Json.body(request, request.getExtra());
-        Reply reply = withKey(key, () -> send("POST", AGREEMENTS_PATH, "", body, key));
-        return withKey(key, () -> reply.read(reply.readObject("agreement"), Agreement.class, "agreement"));
+        return retrying("createAgreement", () -> withKey(key, () -> {
+            Reply reply = send("POST", AGREEMENTS_PATH, "", body, key);
+            return reply.read(reply.readObject("agreement"), Agreement.class, "agreement");
+        }));
     }
 
     /** Reads one agreement. */
     public Agreement getAgreement(String agreementId) {
-        Reply reply = send("GET", agreementPath(agreementId), "", "", "");
-        return reply.read(reply.readObject("agreement"), Agreement.class, "agreement");
+        String path = agreementPath(agreementId);
+        return retrying("getAgreement", () -> {
+            Reply reply = send("GET", path, "", "", "");
+            return reply.read(reply.readObject("agreement"), Agreement.class, "agreement");
+        });
     }
 
     /** Cancels an agreement. No charge runs after this. */
@@ -455,19 +491,27 @@ public final class DominaiteClient {
     /**
      * Registers a webhook endpoint. Needs the {@code webhooks:manage} scope. The answer is the
      * only place the signing secret appears: store it.
+     *
+     * <p>The client never retries this call. A replay of a create that already succeeded
+     * answers without the secret, so an automatic retry could lose it. On a
+     * {@link TransportException}, list the endpoints before you create again.
      */
     public WebhookEndpoint createWebhookEndpoint(CreateWebhookEndpointRequest request) {
         Objects.requireNonNull(request, "request");
         String key = IdempotencyKeys.validate(request.getIdempotencyKey());
         String body = Json.body(request, request.getExtra());
-        Reply reply = withKey(key, () -> send("POST", WEBHOOKS_PATH, "", body, key));
-        return withKey(key, () -> reply.read(reply.readObject("webhook endpoint"), WebhookEndpoint.class, "webhook endpoint"));
+        return withKey(key, () -> {
+            Reply reply = send("POST", WEBHOOKS_PATH, "", body, key);
+            return reply.read(reply.readObject("webhook endpoint"), WebhookEndpoint.class, "webhook endpoint");
+        });
     }
 
     /** Lists your webhook endpoints. Needs the {@code webhooks:manage} scope. */
     public List<WebhookEndpoint> listWebhookEndpoints() {
-        Reply reply = send("GET", WEBHOOKS_PATH, "", "", "");
-        return reply.readList(reply.readArray("webhook endpoint list"), WebhookEndpoint.class, "webhook endpoint");
+        return retrying("listWebhookEndpoints", () -> {
+            Reply reply = send("GET", WEBHOOKS_PATH, "", "", "");
+            return reply.readList(reply.readArray("webhook endpoint list"), WebhookEndpoint.class, "webhook endpoint");
+        });
     }
 
     /** Deletes a webhook endpoint. Needs the {@code webhooks:manage} scope. */
@@ -492,17 +536,20 @@ public final class DominaiteClient {
         if (request.getFrom() == null || request.getTo() == null) {
             throw new ValidationException("from and to are required: ISO 8601 UTC, e.g. 2026-10-01T00:00:00Z");
         }
-        Reply reply = send("GET", TRANSACTIONS_PATH, transactionQuery(request), "", "");
-        JsonNode data = reply.readObject("transaction page");
-        TransactionPage page = reply.read(data, TransactionPage.class, "transaction page");
-        JsonNode items = data.get("items");
-        if (items != null && items.isArray()) {
-            List<TransactionItem> rows = page.getItems();
-            for (int i = 0; i < rows.size(); i++) {
-                rows.get(i).setRaw(items.get(i));
+        String query = transactionQuery(request);
+        return retrying("listTransactions", () -> {
+            Reply reply = send("GET", TRANSACTIONS_PATH, query, "", "");
+            JsonNode data = reply.readObject("transaction page");
+            TransactionPage page = reply.read(data, TransactionPage.class, "transaction page");
+            JsonNode items = data.get("items");
+            if (items != null && items.isArray()) {
+                List<TransactionItem> rows = page.getItems();
+                for (int i = 0; i < rows.size(); i++) {
+                    rows.get(i).setRaw(items.get(i));
+                }
             }
-        }
-        return page;
+            return page;
+        });
     }
 
     static String transactionQuery(ListTransactionsRequest request) {
@@ -785,13 +832,69 @@ public final class DominaiteClient {
         }
     }
 
-    private static void sleep(Duration delay) {
+    // ---------------------------------------------------------------- retries
+
+    private <T> T retrying(String method, Step<T> attempt) {
+        return retrying(method, maxRetries, RETRY_BASE_DELAY, attempt);
+    }
+
+    /**
+     * Runs one attempt, then up to {@code retries} more while the failure is retryable. Each
+     * attempt sends the same path, idempotency key and body bytes, with a fresh timestamp and
+     * signature.
+     */
+    private <T> T retrying(String method, int retries, Duration baseDelay, Step<T> attempt) {
+        for (int retry = 0; ; retry++) {
+            try {
+                return attempt.run();
+            } catch (DominaiteException error) {
+                if (retry >= retries || !retries(error)) {
+                    throw error;
+                }
+                diagnostics.retrying(method, error, retry + 2, retries + 1);
+                sleep(backoff(retry, baseDelay, random.getAsDouble()));
+            }
+        }
+    }
+
+    /**
+     * The failures the client retries: a transport failure (also a 5xx without a code of the
+     * route) and {@code PAYMENT_PROCESSING_UNAVAILABLE}. Never a 429, and never a 5xx code the
+     * route owns, such as {@code CHARGE_OUTCOME_UNKNOWN}.
+     */
+    static boolean retries(DominaiteException error) {
+        if (error instanceof RateLimitedException) {
+            return false;
+        }
+        return error instanceof TransportException || ErrorCodes.PAYMENT_PROCESSING_UNAVAILABLE.equals(error.getCode());
+    }
+
+    /**
+     * Full jitter: a random wait from 0 up to {@code baseDelay * 2^retry}, and never more than
+     * {@link #RETRY_MAX_DELAY}. {@code random} is in [0, 1).
+     */
+    static Duration backoff(int retry, Duration baseDelay, double random) {
+        long ceiling = Math.max(0, baseDelay.toMillis());
+        long cap = RETRY_MAX_DELAY.toMillis();
+        for (int i = 0; i < retry && ceiling < cap; i++) {
+            ceiling *= 2;
+        }
+        return Duration.ofMillis((long) (random * Math.min(ceiling, cap)));
+    }
+
+    private void sleep(Duration delay) {
         try {
-            Thread.sleep(delay.toMillis());
+            sleeper.sleep(delay);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new TransportException("The retry wait was interrupted.", null, null, e);
         }
+    }
+
+    /** Waits between two attempts. Tests swap it for one that records the waits. */
+    @FunctionalInterface
+    interface Sleeper {
+        void sleep(Duration delay) throws InterruptedException;
     }
 
     @FunctionalInterface
@@ -1047,6 +1150,9 @@ public final class DominaiteClient {
         private HttpClient httpClient;
         private Consumer<String> onWarning;
         private Consumer<String> onDebug;
+        private int maxRetries = DEFAULT_MAX_RETRIES;
+        private Sleeper sleeper;
+        private DoubleSupplier random;
 
         private Builder() {
         }
@@ -1077,8 +1183,7 @@ public final class DominaiteClient {
 
         /**
          * Receives the SDK's warnings: a deprecation notice from the API (once per distinct
-         * notice), a retry in {@link #createCheckoutSessionWithRetry}, and a ping clock skew over
-         * 60 seconds. Without a hook they go to {@code System.getLogger("com.dominaite.merchant")}
+         * notice), each automatic retry, and a ping clock skew over 60 seconds. Without a hook they go to {@code System.getLogger("com.dominaite.merchant")}
          * at WARNING. An exception from the hook is dropped, never thrown at the caller.
          */
         public Builder onWarning(Consumer<String> onWarning) {
@@ -1097,9 +1202,36 @@ public final class DominaiteClient {
             return this;
         }
 
-        /** The per-request timeout. Defaults to 45 seconds. */
+        /**
+         * The timeout of one attempt. Defaults to 45 seconds. With retries, a call can take up
+         * to {@code (maxRetries + 1) x timeout}, plus the waits between the attempts.
+         */
         public Builder timeout(Duration timeout) {
             this.timeout = timeout;
+            return this;
+        }
+
+        /**
+         * How many times the client retries a failed call after the first attempt. Defaults to
+         * {@link #DEFAULT_MAX_RETRIES}; 0 sends every call once. The client retries GET calls
+         * and POST calls with an idempotency key, never webhook endpoint create, PATCH or
+         * DELETE. It retries transport failures (a timeout, a network error, a 5xx without a code
+         * of the route) and {@code PAYMENT_PROCESSING_UNAVAILABLE}, never a 429. Every attempt reuses the idempotency key. The wait before retry
+         * {@code n} (from 0) is random between 0 and {@code 500 ms x 2^n}, at most 8 seconds.
+         * A negative value fails {@link #build()} with {@link ValidationException}.
+         */
+        public Builder maxRetries(int maxRetries) {
+            this.maxRetries = maxRetries;
+            return this;
+        }
+
+        Builder sleeper(Sleeper sleeper) {
+            this.sleeper = sleeper;
+            return this;
+        }
+
+        Builder random(DoubleSupplier random) {
+            this.random = random;
             return this;
         }
 

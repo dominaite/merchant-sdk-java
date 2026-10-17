@@ -14,6 +14,8 @@ import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * A local HTTP server for wire tests. It answers queued responses in order and records every
@@ -25,6 +27,8 @@ final class MockServer implements AutoCloseable {
     static final String SECRET = "dms_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     private final HttpServer server;
+    // One thread per exchange, so a slow answer does not hold up the retry behind it.
+    private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Deque<Response> responses = new ArrayDeque<>();
     private final List<Recorded> requests = Collections.synchronizedList(new ArrayList<>());
 
@@ -46,7 +50,14 @@ final class MockServer implements AutoCloseable {
 
             Response response;
             synchronized (responses) {
-                response = responses.isEmpty() ? new Response(500, "{}", Map.of()) : responses.poll();
+                response = responses.isEmpty() ? new Response(500, "{}", Map.of(), 0) : responses.poll();
+            }
+            if (response.delayMillis > 0) {
+                try {
+                    Thread.sleep(response.delayMillis);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
             }
             response.headers.forEach((name, value) -> exchange.getResponseHeaders().add(name, value));
             byte[] out = response.body.getBytes(StandardCharsets.UTF_8);
@@ -61,6 +72,7 @@ final class MockServer implements AutoCloseable {
             }
             exchange.close();
         });
+        server.setExecutor(executor);
         server.start();
     }
 
@@ -68,8 +80,13 @@ final class MockServer implements AutoCloseable {
         return "http://127.0.0.1:" + server.getAddress().getPort() + "/payments";
     }
 
+    /** A client with the default retry count that does not wait between attempts. */
     DominaiteClient client() {
-        return DominaiteClient.builder().keyId(KEY_ID).secret(SECRET).baseUrl(baseUrl()).build();
+        return builder().build();
+    }
+
+    DominaiteClient.Builder builder() {
+        return DominaiteClient.builder().keyId(KEY_ID).secret(SECRET).baseUrl(baseUrl()).sleeper(delay -> { });
     }
 
     MockServer respond(int status, String body) {
@@ -78,7 +95,15 @@ final class MockServer implements AutoCloseable {
 
     MockServer respond(int status, String body, Map<String, String> headers) {
         synchronized (responses) {
-            responses.add(new Response(status, body, headers));
+            responses.add(new Response(status, body, headers, 0));
+        }
+        return this;
+    }
+
+    /** Answers only after {@code delayMillis}, so a client with a shorter timeout gives up first. */
+    MockServer respondLate(long delayMillis) {
+        synchronized (responses) {
+            responses.add(new Response(200, "{}", Map.of(), delayMillis));
         }
         return this;
     }
@@ -106,17 +131,20 @@ final class MockServer implements AutoCloseable {
     @Override
     public void close() {
         server.stop(0);
+        executor.shutdownNow();
     }
 
     static final class Response {
         final int status;
         final String body;
         final Map<String, String> headers;
+        final long delayMillis;
 
-        Response(int status, String body, Map<String, String> headers) {
+        Response(int status, String body, Map<String, String> headers, long delayMillis) {
             this.status = status;
             this.body = body;
             this.headers = headers;
+            this.delayMillis = delayMillis;
         }
     }
 
