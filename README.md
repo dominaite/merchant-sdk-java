@@ -16,14 +16,14 @@ Maven:
 <dependency>
   <groupId>com.dominaite</groupId>
   <artifactId>merchant-sdk</artifactId>
-  <version>0.6.0</version>
+  <version>0.7.0</version>
 </dependency>
 ```
 
 Gradle:
 
 ```groovy
-implementation 'com.dominaite:merchant-sdk:0.6.0'
+implementation 'com.dominaite:merchant-sdk:0.7.0'
 ```
 
 The package is `com.dominaite.merchant`. The JAR has the automatic module name
@@ -219,7 +219,7 @@ base URL with a 45 second timeout. The builder takes:
 | `httpClient` | Your own `java.net.http.HttpClient`, for a proxy or your own executor. Build it with `followRedirects(HttpClient.Redirect.NEVER)`. The SDK still sets `timeout` on each request. |
 
 The SDK sends the User-Agent `dominaite-java/<version> (java <java.version>)`, for example
-`dominaite-java/0.6.0 (java 21.0.4)`, then your suffix.
+`dominaite-java/0.7.0 (java 21.0.4)`, then your suffix.
 
 Make one client for each process. The client is thread-safe and holds one `HttpClient` with its
 connection pool.

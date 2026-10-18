@@ -55,7 +55,7 @@ public final class DominaiteClient {
     public static final Duration RETRY_MAX_DELAY = Duration.ofSeconds(8);
 
     /** The SDK version, also sent in the User-Agent. */
-    public static final String VERSION = "0.6.0";
+    public static final String VERSION = "0.7.0";
 
     public static final String SESSIONS_PATH = "/merchant-api/checkout/sessions";
     public static final String PING_PATH = "/merchant-api/ping";
